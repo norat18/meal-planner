@@ -1,12 +1,21 @@
 {
-  "hosting": {
-    "public": "public",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-    "rewrites": [{ "source": "**", "destination": "/index.html" }],
-    "headers": [
-      { "source": "/index.html", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
-    ]
-  },
+  "hosting": [
+    {
+      "site": "short-list-meals",
+      "public": "public",
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }],
+      "headers": [
+        { "source": "/index.html", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+      ]
+    },
+    {
+      "site": "macro-prep-planner-nt",
+      "public": "public",
+      "ignore": ["**"],
+      "redirects": [{ "source": "**", "destination": "https://short-list-meals.web.app", "type": 301 }]
+    }
+  ],
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
