@@ -291,6 +291,14 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .have-btn:hover { color: var(--ink); border-color: var(--accent); }
 .gitem { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .gitem .used { grid-column: 2 / -1; }
+.gitem .name { min-width: 0; overflow-wrap: anywhere; }
+/* Phones: name and "I already have this" on the first line, the amount under the name. */
+@media (max-width: 640px) {
+  .gitem { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .gitem .amt { grid-column: 2 / -1; grid-row: 2; text-align: left; }
+  .gitem .have-btn { grid-column: 3; grid-row: 1; }
+  .gitem .used { grid-column: 2 / -1; grid-row: 3; }
+}
 .ing-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ing-wrap { overflow-x: auto; }
 .ing-table th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 4px; white-space: nowrap; }
@@ -1011,6 +1019,95 @@ function amountText(g) {
   if (g.untracked && !parts.length) return "to taste";
   return parts.join(" + ");
 }
+/* ---------- purchase units ---------- */
+// What you'd pick up at the store for items sold by the piece, e.g. 400 g onion -> 2 onions.
+// g: grams per piece · cup: grams per cup chopped (volume amounts) · juice: ml of juice per fruit
+// · per: count words that mean one piece · bunch / head: pieces per bunch or head, shown alongside.
+// Average sizes (USDA medium); rounded up, ignoring a small remainder (1.1 onions -> 1).
+const PURCHASE = [
+  { re: /\b(scallions?|green onions?|spring onions?)\b/, one: "scallion", many: "scallions", g: 15, cup: 100, bunch: 6 },
+  { re: /\bshallots?\b/, one: "shallot", many: "shallots", g: 40, cup: 160 },
+  { re: /\bgarlic( cloves?)?$|^(clove|bulb) garlic$/, one: "clove", many: "cloves", g: 5, cup: 136, per: ["clove"], head: 10 },
+  { re: /\bonions?\b/, one: "onion", many: "onions", g: 150, cup: 160 },
+  { re: /\bbell peppers?\b/, one: "bell pepper", many: "bell peppers", g: 150, cup: 150 },
+  { re: /\bjalape(n|ñ)os?\b/, one: "jalapeño", many: "jalapeños", g: 15, cup: 90 },
+  { re: /\bpoblanos?( peppers?)?\b/, one: "poblano", many: "poblanos", g: 120, cup: 120 },
+  { re: /\broma tomato(es)?\b/, one: "roma tomato", many: "roma tomatoes", g: 90, cup: 180 },
+  { re: /^(tomato|tomatoes|large tomato|beefsteak tomato(es)?)$/, one: "tomato", many: "tomatoes", g: 150, cup: 180 },
+  { re: /\bcarrots?\b/, one: "carrot", many: "carrots", g: 70, cup: 128 },
+  { re: /\bcelery\b/, one: "stalk", many: "stalks", g: 40, cup: 100, per: ["stalk", "rib"] },
+  { re: /\b(zucchinis?|summer squash|courgettes?)\b/, one: "zucchini", many: "zucchini", g: 200, cup: 124 },
+  { re: /\b(mini|persian) cucumbers?\b/, one: "mini cucumber", many: "mini cucumbers", g: 100, cup: 120 },
+  { re: /\bcucumbers?\b/, one: "cucumber", many: "cucumbers", g: 300, cup: 120 },
+  { re: /\bsweet potato(es)?\b/, one: "sweet potato", many: "sweet potatoes", g: 200, cup: 133 },
+  { re: /^(potato|potatoes|russet potato(es)?|yukon gold potato(es)?|gold potato(es)?)$/, one: "potato", many: "potatoes", g: 200, cup: 150 },
+  { re: /\bavocados?\b/, one: "avocado", many: "avocados", g: 150, cup: 150 },
+  { re: /^lemons?( juice)?$/, one: "lemon", many: "lemons", g: 100, juice: 45, fresh: true },
+  { re: /^limes?( juice)?$/, one: "lime", many: "limes", g: 65, juice: 30, fresh: true },
+  { re: /\bapples?$/, one: "apple", many: "apples", g: 180, cup: 125 },
+  { re: /^bananas?$/, one: "banana", many: "bananas", g: 120, cup: 150 },
+  { re: /^(orange|oranges|navel orange)s?$/, one: "orange", many: "oranges", g: 130, cup: 180 },
+  { re: /^peach(es)?$/, one: "peach", many: "peaches", g: 150, cup: 155 },
+  { re: /^mangos?(es)?$/, one: "mango", many: "mangos", g: 300, cup: 165 },
+  { re: /\beggplants?\b/, one: "eggplant", many: "eggplants", g: 450, cup: 82 },
+  { re: /\bkohlrabi\b/, one: "kohlrabi", many: "kohlrabi", g: 300, cup: 135 },
+  { re: /^(large |pasture-raised |free-range )?eggs?$/, one: "egg", many: "eggs", g: 50 },
+  { re: /^(cilantro|coriander|parsley|flat-leaf parsley|dill|mint|basil|thai basil)$/, one: "bunch", many: "bunches", g: 50, cup: 16, per: ["bunch"], leafG: 0.5, sprigG: 1 }
+];
+// Prepared or packaged forms are bought as they are.
+const NOT_FRESH = /powder|paste|sauce|juice|canned|crushed|dried|flakes|fried|pickled|jarred|frozen|oil|seasoning|spice|salsa|stock|broth|chips|puree|noodle|crema|dressing|vinegar|zest|seeds?\b|ground/;
+function purchaseRule(name) {
+  // "fresh basil", "handful cilantro", "mint leaves" are the same thing you buy.
+  const n = String(name).toLowerCase().trim().replace(/^(fresh|ripe|handful( of)?|bunch( of)?)\s+/, "").replace(/\s+leaves$/, "");
+  if (/chives|baby potato/.test(n)) return null;
+  // Fresh citrus juice is squeezed from fruit you buy; other juices and prepared forms are bought as they are.
+  const r = PURCHASE.find(x => x.re.test(n));
+  if (!r || (NOT_FRESH.test(n) && !(r.fresh && /^(lemon|lime)s? juice$/.test(n)))) return null;
+  return r;
+}
+// { main: "2 onions", detail: "400 g in recipes" } or null when the item isn't sold by the piece
+// (or none of its amounts can be converted).
+function purchaseText(g) {
+  const rule = purchaseRule(g.name);
+  if (!rule) return null;
+  let pieces = 0, used = false;
+  const leftover = {};
+  for (const [f, v] of Object.entries(g.amounts)) {
+    if (f === "weight") { pieces += v / rule.g; used = true; }
+    else if (f === "volume") {
+      if (rule.juice) { pieces += v / rule.juice; used = true; }
+      else if (rule.cup) { pieces += (v / 236.6) * rule.cup / rule.g; used = true; }
+      else leftover[f] = v;
+    } else {
+      const u = f.replace(/^count:/, "");
+      // Herbs: a bare count means leaves, and sprigs are small; both convert by weight.
+      if (rule.leafG && !u) { pieces += v * rule.leafG / rule.g; used = true; }
+      else if (rule.sprigG && /^sprigs?$/.test(u)) { pieces += v * rule.sprigG / rule.g; used = true; }
+      else if (!u || u === rule.one || u === rule.many || (rule.per || []).includes(u)) { pieces += v; used = true; }
+      else if (u === "bunch" && rule.bunch) { pieces += v * rule.bunch; used = true; }
+      else if (u === "head" && rule.head) { pieces += v * rule.head; used = true; }
+      else leftover[f] = v;
+    }
+  }
+  if (!used) return null;
+  const n = Math.max(1, Math.ceil(pieces - 0.15));
+  let main = `${n} ${n === 1 ? rule.one : rule.many}`;
+  if (rule.bunch) main += ` (${Math.ceil(n / rule.bunch)} bunch${Math.ceil(n / rule.bunch) > 1 ? "es" : ""})`;
+  if (rule.head && n > 3) main += ` (${Math.ceil(n / rule.head)} head${Math.ceil(n / rule.head) > 1 ? "s" : ""})`;
+  const extra = Object.entries(leftover).map(([f, v]) => fmtAmount(f, v, g.metric ? g.metric[f] : true));
+  if (extra.length) main += " + " + extra.join(" + ");
+  // Show the recipe amounts when they were in grams, cups or spoons, so the conversion can be checked.
+  const isPiece = u => (!u && !rule.leafG) || u === rule.one || u === rule.many || (rule.per || []).includes(u);
+  const converted = Object.keys(g.amounts).some(f => f === "weight" || f === "volume" || (f.startsWith("count:") && !isPiece(f.slice(6)) && !leftover[f]));
+  // Bare counts read as pieces ("1 onion + ½ cup"), not a lone number.
+  const order = f => f === "weight" ? 1 : f === "volume" ? 2 : 0;
+  const detail = Object.entries(g.amounts).sort((a, b) => order(a[0]) - order(b[0]))
+    .map(([f, v]) => f === "count:" ? `${fmtNum(v)} ${rule.leafG ? (v > 1 ? "leaves" : "leaf") : v > 1 ? rule.many : rule.one}` : fmtAmount(f, v, g.metric ? g.metric[f] : true)).join(" + ");
+  return { main, detail: converted ? `${detail} in recipes` : "" };
+}
+// What the list shows: the purchase amount when the item is sold by the piece, else the combined amounts.
+function buyText(g) { const p = purchaseText(g); return p ? p.main + (p.detail ? ` (${p.detail})` : "") : amountText(g); }
+
 // One ingredient's amount for a recipe, in its own unit (recipe sheet and editor).
 function ingAmount(ing, mult) {
   if (ing.qty == null || isNaN(ing.qty)) return "";
@@ -1386,12 +1483,12 @@ function viewGroceries() {
     return `<div class="cat"><h3><span>${esc(cat)}</span><span class="num">${list.length}</span></h3>
       ${list.map(g => `<div class="gitem ${checked[g.key] ? "done" : ""}">
         <input type="checkbox" id="g-${keyId(g.key)}" data-gkey="${esc(g.key)}" ${checked[g.key] ? "checked" : ""}>
-        <label class="name" for="g-${keyId(g.key)}">${esc(g.name)}</label><span class="amt">${esc(amountText(g))}</span>
+        <label class="name" for="g-${keyId(g.key)}">${esc(g.name)}</label><span class="amt">${(p => p ? `${esc(p.main)}${p.detail ? `<br><span class="muted" style="font-size:11px">${esc(p.detail)}</span>` : ""}` : esc(amountText(g)))(purchaseText(g))}</span>
         <button class="have-btn" data-action="have" data-key="${esc(g.key)}" title="Hide this from future lists until you add it back">I already have this</button>
         <span class="used">${esc([...g.used].join(", "))}</span></div>`).join("")}</div>`;
   }).join("");
   const haveList = have.length ? `<details class="cat"><summary class="label" style="cursor:pointer;padding:10px 0">Items you already have (${have.length}), hidden from the list</summary>
-      ${have.sort((a, b) => a.name.localeCompare(b.name)).map(g => `<div class="gitem"><span></span><span class="name">${esc(g.name)}</span><span class="amt muted">${esc(amountText(g))}</span>
+      ${have.sort((a, b) => a.name.localeCompare(b.name)).map(g => `<div class="gitem"><span></span><span class="name">${esc(g.name)}</span><span class="amt muted">${esc(buyText(g))}</span>
         <button class="have-btn" data-action="unhave" data-key="${esc(g.key)}">Running low? Add back</button></div>`).join("")}</details>` : "";
   const otherHave = (state.settings.have || []).filter(k => !items.some(i => i.key === k));
   const prep = cook.sort((a, b) => b.portions - a.portions).map(c => {
@@ -1908,7 +2005,7 @@ document.addEventListener("click", async e => {
       const { items } = groceries();
       const txt = CATS.map(cat => {
         const l = items.filter(i => (CATS.includes(i.category) ? i.category : "Other") === cat).sort((x, y) => x.name.localeCompare(y.name));
-        return l.length ? cat + "\n" + l.map(g => `- ${g.name}: ${amountText(g)}`).join("\n") : "";
+        return l.length ? cat + "\n" + l.map(g => `- ${g.name}: ${buyText(g)}`).join("\n") : "";
       }).filter(Boolean).join("\n\n");
       try { await navigator.clipboard.writeText(txt); toast("Grocery list copied."); }
       catch { const ta = document.createElement("textarea"); ta.value = txt; ta.className = "code"; b.closest(".panel").prepend(ta); ta.select(); toast("Select-all is ready. Copy with your keyboard."); }
