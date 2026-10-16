@@ -229,6 +229,18 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 12px; }
 .steps li { counter-increment: s; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; line-height: 1.55; max-width: 68ch; }
 .steps li::before { content: counter(s); font-family: var(--font-display); font-weight: 800; font-size: 15px; width: 26px; height: 26px; border-radius: 50%; background: var(--soft); color: var(--accent); display: grid; place-items: center; }
+.dlg-back {
+  position: fixed; inset: 0; z-index: 30; background: rgba(10,16,12,.5);
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+}
+.dlg { background: var(--surface); color: var(--ink); border-radius: 12px; border-top: 4px solid var(--warn); width: 100%; max-width: 420px; padding: 20px 22px; display: grid; gap: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.dlg h2 { font-size: 19px; line-height: 1.25; }
+.dlg p { margin: 0; color: var(--muted); }
+.dlg p b { color: var(--ink); }
+.dlg-actions { justify-content: flex-end; }
+.btn.danger { background: var(--warn); border-color: var(--warn); color: var(--surface); }
+.btn.danger:hover { filter: brightness(1.05); }
 .mfp-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
 .barcode { background: #FFFFFF; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; display: grid; justify-items: center; gap: 2px; max-width: 100%; }
 .barcode svg { display: block; max-width: 100%; height: auto; }
@@ -270,6 +282,7 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
   <main id="view" aria-live="polite"><div class="empty">Loading your recipes…</div></main>
 </div>
 <div id="sheet"></div>
+<div id="dialog"></div>
 <div class="toast" id="toast" hidden></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
 
@@ -1250,7 +1263,36 @@ function mfpDayText(d) {
   lines.push(`Total: Calories ${Math.round(st.tot.cal)} · Carbs ${Math.round(st.tot.c)} g · Fat ${Math.round(st.tot.f)} g · Protein ${Math.round(st.tot.p)} g`);
   return `${DAYS[d]} for MyFitnessPal Quick Add\n` + lines.join("\n");
 }
-document.addEventListener("keydown", e => { if (e.key === "Escape" && viewing) closeRecipe(); });
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (pendingDelete) closeDialog(); else if (viewing) closeRecipe();
+});
+
+// Deleting a recipe takes two steps: the Delete button opens this dialog, and only its Delete recipe button deletes.
+let pendingDelete = null, deleteReturn = null;
+function askDelete(id, from) {
+  if (!state.recipes[id]) return;
+  pendingDelete = id; deleteReturn = from || null;
+  renderDialog();
+  document.getElementById("dlg-cancel")?.focus();
+}
+function closeDialog() {
+  pendingDelete = null; renderDialog();
+  if (deleteReturn && deleteReturn.isConnected) deleteReturn.focus();
+}
+function renderDialog() {
+  const el = document.getElementById("dialog");
+  const r = pendingDelete && state.recipes[pendingDelete];
+  if (!r) { el.innerHTML = ""; return; }
+  let used = 0;
+  state.plan.days.forEach(day => { for (const s in day.slots) if (day.slots[s] && day.slots[s].id === r.id) used++; });
+  el.innerHTML = `<div class="dlg-back" data-action="cancel-del">
+    <div class="dlg" role="alertdialog" aria-modal="true" aria-labelledby="dlg-title" aria-describedby="dlg-desc">
+      <h2 id="dlg-title">Are you sure you want to delete this recipe?</h2>
+      <p id="dlg-desc"><b>${esc(r.name)}</b> will be removed from your recipes${used ? ` and from ${used} meal${used > 1 ? "s" : ""} in your week plan` : ""}. This can't be undone.</p>
+      <div class="row dlg-actions"><button class="btn" id="dlg-cancel" data-action="cancel-del">Cancel</button><button class="btn danger" data-action="confirm-del" data-id="${esc(r.id)}">Delete recipe</button></div>
+    </div></div>`;
+}
 
 function viewTargets() {
   const S = state.settings, t = S.targets;
@@ -1307,6 +1349,7 @@ document.addEventListener("click", async e => {
   if (!b) return;
   const a = b.dataset.action, d = +b.dataset.d, S = state.settings;
   if (a === "close-sheet") { if (e.target === b || b.id === "sheet-close") closeRecipe(); return; }
+  if (a === "cancel-del") { if (e.target === b || b.tagName === "BUTTON") closeDialog(); return; }
   if (a === "view") return openRecipe(b.dataset.id, b.dataset.x, b);
   if (a === "copy-mfp") { const r = state.recipes[b.dataset.id]; if (r) copyText(mfpLine(r, b.dataset.x ? +b.dataset.x : null), "Copied. Paste into MyFitnessPal Quick Add."); return; }
   if (a === "copy-mfp-day") return copyText(mfpDayText(d), `Copied ${DAYS[d]}'s meals for MyFitnessPal.`);
@@ -1363,10 +1406,16 @@ document.addEventListener("click", async e => {
     case "new": state.editing = "new"; state.importing = false; render(); document.getElementById("f-name")?.focus(); return;
     case "edit": state.editing = b.dataset.id; state.importing = false; render(); window.scrollTo({ top: 0 }); return;
     case "cancel-edit": state.editing = null; return render();
-    case "del": {
-      if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "Confirm"; return; }
-      const name = state.recipes[b.dataset.id]?.name;
-      await deleteRecipes([b.dataset.id]); toast(`Deleted ${name}.`); return render();
+    case "del": return askDelete(b.dataset.id, b);
+    case "confirm-del": {
+      const id = b.dataset.id, name = state.recipes[id]?.name;
+      pendingDelete = null; renderDialog();
+      let removed = 0;
+      state.plan.days.forEach(day => { for (const s in day.slots) if (day.slots[s] && day.slots[s].id === id) { delete day.slots[s]; removed++; } });
+      if (removed) savePlan();
+      await deleteRecipes([id]);
+      toast(`Deleted ${name}.${removed ? ` Cleared it from ${removed} meal${removed > 1 ? "s" : ""} in your plan.` : ""}`);
+      return render();
     }
     case "import": state.importing = true; state.editing = null; render(); document.getElementById("imp-text")?.focus(); return;
     case "cancel-import": state.importing = false; return render();
