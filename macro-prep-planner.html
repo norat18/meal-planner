@@ -1238,42 +1238,37 @@ function mfpLine(r, x, label) {
   const n = mfpNumbers(r, x);
   return `${label ? label + ": " : ""}${r.name}${x && x !== 1 ? ` (×${x})` : ""}\n  Calories ${n.cal} · Carbs ${n.c} g · Fat ${n.f} g · Protein ${n.p} g`;
 }
-// Coach Greg recipes carry the barcode printed in their pack (r.mfp). Every other recipe gets its own
-// code, derived from its id so it never changes: a UPC-A starting with "29", the range reserved for
-// in-store use, so it can't collide with a packaged product. MyFitnessPal won't know these codes until
-// the first scan, when it offers to create a food for the barcode.
-function barcodeFor(r) {
-  if (r.mfp && r.mfp.code) return { format: r.mfp.format === "UPCE" ? "UPCE" : "UPC", code: r.mfp.code, generated: false };
-  let h = 2166136261;
-  for (const ch of String(r.id)) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; }
-  const body = "29" + String(h % 1e9).padStart(9, "0");
-  let sum = 0;
-  for (let i = 0; i < 11; i++) sum += (+body[i]) * (i % 2 === 0 ? 3 : 1);
-  return { format: "UPC", code: body + ((10 - sum % 10) % 10), generated: true };
+// Only Coach Greg recipes have a barcode MyFitnessPal recognises (the one printed in their pack, r.mfp).
+// Every other recipe exists in MyFitnessPal as a public food named "<brand> <name>", found by search.
+function mfpBrand(r) {
+  const pre = String(r.id).split("-")[0];
+  return pre === "st" ? "Strong" : pre === "hp" ? "Coach Greg" : pre === "my" ? "Homemade" : "";
 }
 function mfpBlock(r, x) {
-  const n = mfpNumbers(r, x), bc = barcodeFor(r), per = mfpNumbers(r, 1);
+  const n = mfpNumbers(r, x);
   const portion = x && x !== 1 ? `, then set servings to ${x}` : "";
-  const scan = `<div class="barcode"><svg id="mfp-barcode" role="img" aria-label="Barcode ${esc(bc.code)}"></svg><span>${bc.generated ? "Your barcode for this recipe" : "Scan in MyFitnessPal" + portion}</span></div>`;
-  const setup = bc.generated
-    ? `<p class="first-scan"><b>First scan only:</b> MyFitnessPal won't recognise this barcode yet. Choose to create a food for it, name it <b>${esc(r.name)}</b>, set one serving to ${per.cal} kcal, ${per.c} g carbs, ${per.f} g fat and ${per.p} g protein, and save. After that, scanning it logs this recipe${portion}.</p>`
+  const brand = mfpBrand(r);
+  const scan = r.mfp && r.mfp.code
+    ? `<div class="barcode"><svg id="mfp-barcode" role="img" aria-label="MyFitnessPal barcode ${esc(r.mfp.code)}"></svg><span>Scan in MyFitnessPal${portion}</span></div>`
+    : "";
+  const search = !scan && brand
+    ? `<p class="first-scan">In the MyFitnessPal app, search <b>${esc(brand + " " + r.name)}</b> and add it${portion}.</p>`
     : "";
   return `<div><h3><span>Log in MyFitnessPal</span></h3>
     <div class="mfp-row">${scan}
       <div class="quick">
-        <p>Or use Quick Add with these numbers ${x ? "for this portion" : "per serving"}:</p>
+        <p>${scan || search ? "Or use Quick Add" : "Use Quick Add"} with these numbers ${x ? "for this portion" : "per serving"}:</p>
         <dl><dt>Calories</dt><dd>${n.cal}</dd><dt>Carbs</dt><dd>${n.c} g</dd><dt>Fat</dt><dd>${n.f} g</dd><dt>Protein</dt><dd>${n.p} g</dd></dl>
         <div class="row"><button class="btn small" data-action="copy-mfp" data-id="${esc(r.id)}" data-x="${x || ""}">Copy for Quick Add</button></div>
       </div>
-    </div>${setup}</div>`;
+    </div>${search}</div>`;
 }
 function drawBarcode(r) {
   const el = document.getElementById("mfp-barcode");
-  if (!el) return;
-  const bc = barcodeFor(r);
+  if (!el || !r.mfp) return;
   try {
-    window.JsBarcode(el, bc.code, { format: bc.format, background: "#ffffff", lineColor: "#000000", width: 2, height: 64, margin: 8, fontSize: 14 });
-  } catch { el.closest(".barcode").innerHTML = `<span>Barcode ${esc(bc.code)}: type it into MyFitnessPal's barcode search</span>`; }
+    window.JsBarcode(el, r.mfp.code, { format: r.mfp.format === "UPCE" ? "UPCE" : "UPC", background: "#ffffff", lineColor: "#000000", width: 2, height: 64, margin: 8, fontSize: 14 });
+  } catch { el.closest(".barcode").innerHTML = `<span>Barcode ${esc(r.mfp.code)}: type it into MyFitnessPal's barcode search</span>`; }
 }
 async function copyText(text, okMsg) {
   try { await navigator.clipboard.writeText(text); toast(okMsg); }
