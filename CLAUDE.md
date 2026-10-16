@@ -6,7 +6,7 @@ Macro Prep Planner: a single-file app (`macro-prep-planner.html`) published as a
 
 MyFitnessPal has no public API, so the app offers two manual paths and Claude can do a third on request:
 
-- **Barcode:** recipes with an `mfp` field (`{format: "UPC" | "UPCE", code}`) show a scannable barcode in the recipe view. These are the codes printed in the Coach Greg packs, decoded from the PDFs' barcode images.
+- **Barcode:** every recipe shows a scannable barcode in the recipe view. Recipes with an `mfp` field (`{format: "UPC" | "UPCE", code}`) use the code printed in the Coach Greg packs, decoded from the PDFs' barcode images. All others get a generated UPC-A from `barcodeFor()`: prefix `29` (in-store range, no clash with packaged goods) plus a hash of the recipe id, so it never changes unless the id does. MyFitnessPal doesn't know generated codes until the first scan, when Nora creates a food for it with the recipe's per-serving macros; don't change recipe ids, or that link breaks.
 - **Quick Add copy:** every recipe view and day card can copy calories, carbs, fat and protein (MyFitnessPal's Quick Add field order) at the planned portion.
 - **Claude logs it in Chrome:** when Nora asks (for example "log today's lunch"), read the plan (`app/plan`) and recipes from the artifact database, compute each meal's numbers at its portion (`recipe macros × x`), then use Claude in Chrome on myfitnesspal.com, signed in as Nora, to add each meal to the right Diary section with Quick Add. Show the entries and get her OK before saving each one. Only do this when she asks; never log meals on your own.
 

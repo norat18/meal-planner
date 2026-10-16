@@ -251,6 +251,8 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .quick dt { font-size: 11px; color: var(--muted); }
 .quick dd { margin: 0; font-family: var(--font-data); font-size: 15px; font-variant-numeric: tabular-nums; grid-row: 2; }
 .quick p { margin: 0; font-size: 13px; color: var(--muted); max-width: 52ch; }
+.first-scan { margin: 10px 0 0; font-size: 13px; color: var(--muted); max-width: 68ch; border-left: 3px solid var(--accent); padding-left: 10px; }
+.first-scan b { color: var(--ink); }
 @media (max-width: 560px) {
   .sheet-back { align-items: flex-end; padding-bottom: 0; padding-left: 0; padding-right: 0; }
   .sheet { border-radius: 14px 14px 0 0; max-height: 92%; padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px)); padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
@@ -1236,26 +1238,42 @@ function mfpLine(r, x, label) {
   const n = mfpNumbers(r, x);
   return `${label ? label + ": " : ""}${r.name}${x && x !== 1 ? ` (×${x})` : ""}\n  Calories ${n.cal} · Carbs ${n.c} g · Fat ${n.f} g · Protein ${n.p} g`;
 }
+// Coach Greg recipes carry the barcode printed in their pack (r.mfp). Every other recipe gets its own
+// code, derived from its id so it never changes: a UPC-A starting with "29", the range reserved for
+// in-store use, so it can't collide with a packaged product. MyFitnessPal won't know these codes until
+// the first scan, when it offers to create a food for the barcode.
+function barcodeFor(r) {
+  if (r.mfp && r.mfp.code) return { format: r.mfp.format === "UPCE" ? "UPCE" : "UPC", code: r.mfp.code, generated: false };
+  let h = 2166136261;
+  for (const ch of String(r.id)) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; }
+  const body = "29" + String(h % 1e9).padStart(9, "0");
+  let sum = 0;
+  for (let i = 0; i < 11; i++) sum += (+body[i]) * (i % 2 === 0 ? 3 : 1);
+  return { format: "UPC", code: body + ((10 - sum % 10) % 10), generated: true };
+}
 function mfpBlock(r, x) {
-  const n = mfpNumbers(r, x);
-  const scan = r.mfp && r.mfp.code
-    ? `<div class="barcode"><svg id="mfp-barcode" role="img" aria-label="MyFitnessPal barcode ${esc(r.mfp.code)}"></svg><span>Scan in MyFitnessPal${x && x !== 1 ? `, then set servings to ${x}` : ""}</span></div>`
+  const n = mfpNumbers(r, x), bc = barcodeFor(r), per = mfpNumbers(r, 1);
+  const portion = x && x !== 1 ? `, then set servings to ${x}` : "";
+  const scan = `<div class="barcode"><svg id="mfp-barcode" role="img" aria-label="Barcode ${esc(bc.code)}"></svg><span>${bc.generated ? "Your barcode for this recipe" : "Scan in MyFitnessPal" + portion}</span></div>`;
+  const setup = bc.generated
+    ? `<p class="first-scan"><b>First scan only:</b> MyFitnessPal won't recognise this barcode yet. Choose to create a food for it, name it <b>${esc(r.name)}</b>, set one serving to ${per.cal} kcal, ${per.c} g carbs, ${per.f} g fat and ${per.p} g protein, and save. After that, scanning it logs this recipe${portion}.</p>`
     : "";
   return `<div><h3><span>Log in MyFitnessPal</span></h3>
     <div class="mfp-row">${scan}
       <div class="quick">
-        <p>${scan ? "Or use Quick Add" : "Use Quick Add"} with these numbers ${x ? "for this portion" : "per serving"}:</p>
+        <p>Or use Quick Add with these numbers ${x ? "for this portion" : "per serving"}:</p>
         <dl><dt>Calories</dt><dd>${n.cal}</dd><dt>Carbs</dt><dd>${n.c} g</dd><dt>Fat</dt><dd>${n.f} g</dd><dt>Protein</dt><dd>${n.p} g</dd></dl>
         <div class="row"><button class="btn small" data-action="copy-mfp" data-id="${esc(r.id)}" data-x="${x || ""}">Copy for Quick Add</button></div>
       </div>
-    </div></div>`;
+    </div>${setup}</div>`;
 }
 function drawBarcode(r) {
   const el = document.getElementById("mfp-barcode");
-  if (!el || !r.mfp) return;
+  if (!el) return;
+  const bc = barcodeFor(r);
   try {
-    window.JsBarcode(el, r.mfp.code, { format: r.mfp.format === "UPCE" ? "UPCE" : "UPC", background: "#ffffff", lineColor: "#000000", width: 2, height: 64, margin: 8, fontSize: 14 });
-  } catch { el.closest(".barcode").innerHTML = `<span>Barcode ${esc(r.mfp.code)}: type it into MyFitnessPal's barcode search</span>`; }
+    window.JsBarcode(el, bc.code, { format: bc.format, background: "#ffffff", lineColor: "#000000", width: 2, height: 64, margin: 8, fontSize: 14 });
+  } catch { el.closest(".barcode").innerHTML = `<span>Barcode ${esc(bc.code)}: type it into MyFitnessPal's barcode search</span>`; }
 }
 async function copyText(text, okMsg) {
   try { await navigator.clipboard.writeText(text); toast(okMsg); }
