@@ -156,26 +156,27 @@ nav.tabs .count { font-family: var(--font-data); font-size: 12px; color: var(--m
 
 /* Recipes */
 .rlist { display: grid; }
-.rrow { display: grid; grid-template-columns: minmax(0, 1fr) repeat(4, 66px) 128px; gap: 6px 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.rhead { display: grid; grid-template-columns: minmax(0, 1fr) repeat(4, 66px) 128px; gap: 0 14px; padding: 2px 0 6px; border-bottom: 2px solid var(--ink); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-.rhead span { text-align: right; }
-.rhead span:first-child { text-align: left; }
-.mcell { display: grid; justify-items: end; line-height: 1.15; }
-.mcell .mv { font-family: var(--font-data); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.mcell .mv small { font-size: 11px; color: var(--muted); margin-left: 1px; font-weight: 400; }
-.mcell .mk { display: none; font-size: 11px; color: var(--muted); }
-.mcell .mk i, .rhead i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
-.mcell.best .mv { color: var(--accent); }
+.rrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) 128px; gap: 6px 18px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.rhead { padding: 2px 0 6px; border-bottom: 2px solid var(--ink); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.msum { display: grid; gap: 2px; justify-items: end; text-align: right; min-width: 0; }
+.msum .kcal { font-family: var(--font-display); font-weight: 700; font-size: 18px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.msum .mline { font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.msum .mline .sep { color: var(--muted); margin: 0 6px; }
+.msum .lbl { color: var(--muted); font-weight: 600; }
+.msum .hl { background: var(--soft); color: var(--accent); border-radius: 4px; padding: 0 4px; font-weight: 600; }
+.msum .hl .lbl { color: var(--accent); }
 .split { display: flex; height: 5px; width: min(160px, 100%); border-radius: 3px; overflow: hidden; margin-top: 5px; background: var(--soft); }
 .split span { display: block; height: 100%; }
 .ractions { display: flex; gap: 6px; justify-content: flex-end; }
+.sheet .msum { justify-items: start; text-align: left; padding: 10px 12px; background: var(--soft); border-radius: 8px; }
+.sheet .msum .kcal { font-size: 24px; }
+.sheet .msum .mline { font-size: 16px; white-space: normal; }
+.sheet .msum .per { font-size: 12px; color: var(--muted); }
 @media (max-width: 720px) {
-  .rhead { display: none; }
-  .rrow { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
-  .rrow .rname { grid-column: 1 / 5; }
-  .rrow .ractions { grid-column: 5; grid-row: 1; }
-  .rrow .mcell { grid-row: 2; justify-items: start; }
-  .mcell .mk { display: block; }
+  .rrow { grid-template-columns: minmax(0, 1fr) auto; }
+  .rrow .ractions { grid-column: 2; grid-row: 1; }
+  .rrow .msum { grid-column: 1 / -1; grid-row: 2; justify-items: start; text-align: left; }
+  .msum .mline { white-space: normal; }
 }
 .rrow .nm { font-weight: 600; }
 .rrow .sub { font-size: 12px; color: var(--muted); }
@@ -1053,6 +1054,14 @@ function viewGroceries() {
   </div>`;
 }
 
+// "576 kcal" over "Protein: 40g | Carbs: 58g | Fat: 20g". mult scales to a portion; hi highlights the sorted value.
+function macroSummary(r, mult, hi, note) {
+  const m = mult || 1, n = v => +(v * m).toFixed(1);
+  const part = (k, label) => `<span class="${hi === k ? "hl" : ""}"><span class="lbl">${label}:</span> ${n(r[k])}g</span>`;
+  return `<div class="msum">${note ? `<span class="per">${note}</span>` : ""}<span class="kcal ${hi === "cal" ? "hl" : ""}">${Math.round(r.cal * m)} kcal</span>
+    <span class="mline">${part("p", "Protein")}<span class="sep">|</span>${part("c", "Carbs")}<span class="sep">|</span>${part("f", "Fat")}</span></div>`;
+}
+
 function viewRecipes() {
   const all = Object.values(state.recipes);
   const cs = cuisines();
@@ -1071,19 +1080,17 @@ function viewRecipes() {
     .sort((a, b) => SORTS[sort][1](a, b) || a.name.localeCompare(b.name));
   const exCount = all.filter(r => r.example).length;
   const hi = { protein: "p", density: "p", cal: "cal", carbs: "c", fat: "f" }[sort];
-  const fmt = v => +(+v).toFixed(1);
-  const cell = (r, k, label, color, unit) => `<div class="mcell ${hi === k ? "best" : ""}"><span class="mv">${fmt(r[k])}<small>${unit}</small></span><span class="mk">${color ? macroDot(color) : ""}${label}</span></div>`;
   const rows = list.map(r => {
     const pc = r.p * 4, cc = r.c * 4, fc = r.f * 9, tot = (pc + cc + fc) || 1;
     const split = `<div class="split" title="Share of calories: protein ${Math.round(pc / tot * 100)}%, carbs ${Math.round(cc / tot * 100)}%, fat ${Math.round(fc / tot * 100)}%"><span style="width:${pc / tot * 100}%;background:var(--protein)"></span><span style="width:${cc / tot * 100}%;background:var(--carb)"></span><span style="width:${fc / tot * 100}%;background:var(--fat)"></span></div>`;
     return `<div class="rrow">
     <div class="rname"><div class="nm"><button class="linkish" data-action="view" data-id="${esc(r.id)}">${esc(r.name)}</button>${r.example ? `<span class="tag">Example</span>` : ""}</div>
       <div class="sub">${esc(r.cuisine)} · ${r.meals.map(m => SLOTS.find(s => s[0] === m)[1]).join(", ") || "Base recipe"} · makes ${r.servings}</div>${split}</div>
-    ${cell(r, "cal", "Calories", "", "")}${cell(r, "p", "Protein", "--protein", "g")}${cell(r, "c", "Carbs", "--carb", "g")}${cell(r, "f", "Fat", "--fat", "g")}
+    ${macroSummary(r, 1, hi)}
     <div class="ractions">${state.readOnly ? "" : `<button class="btn small" data-action="edit" data-id="${esc(r.id)}">Edit</button><button class="btn ghost small" data-action="del" data-id="${esc(r.id)}">Delete</button>`}</div>
   </div>`;
   }).join("");
-  const head = `<div class="rhead" aria-hidden="true"><span>${list.length} recipe${list.length === 1 ? "" : "s"} · per serving</span><span>Calories</span><span>${macroDot("--protein")}Protein</span><span>${macroDot("--carb")}Carbs</span><span>${macroDot("--fat")}Fat</span><span></span></div>`;
+  const head = `<div class="rhead">${list.length} recipe${list.length === 1 ? "" : "s"} · calories and macros are per serving</div>`;
   return `<div class="grid2" style="grid-template-columns:minmax(0,1fr)">
     ${state.editing ? editorPanel() : ""}
     ${state.importing ? importPanel() : ""}
@@ -1209,7 +1216,8 @@ function renderSheet() {
         <h2 id="sheet-title">${esc(r.name)}<div class="sub">${esc(r.cuisine)} · ${esc(meals)}${r.source ? " · " + esc(r.source) : ""}</div></h2>
         <button class="close" id="sheet-close" data-action="close-sheet" aria-label="Close recipe">×</button>
       </div>
-      <div><h3><span>${x ? "This portion" : "Per serving"}</span></h3><div class="mfacts">${facts}</div></div>
+      ${macroSummary(r, 1, null, "Per serving")}
+      ${x && x !== 1 ? `<div><h3><span>Your portion: ${x} servings</span></h3><div class="mfacts">${facts}</div></div>` : ""}
       ${mfpBlock(r, x)}
       <div><h3><span>Ingredients</span><span style="text-transform:none;letter-spacing:0;font-weight:500">${esc(portionNote)}</span></h3><ul class="ilist">${ings}</ul></div>
       <div><h3><span>Instructions</span></h3>${steps}</div>
