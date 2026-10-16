@@ -156,13 +156,32 @@ nav.tabs .count { font-family: var(--font-data); font-size: 12px; color: var(--m
 
 /* Recipes */
 .rlist { display: grid; }
-.rrow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) auto; gap: 6px 16px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.rrow { display: grid; grid-template-columns: minmax(0, 1fr) repeat(4, 66px) 128px; gap: 6px 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.rhead { display: grid; grid-template-columns: minmax(0, 1fr) repeat(4, 66px) 128px; gap: 0 14px; padding: 2px 0 6px; border-bottom: 2px solid var(--ink); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.rhead span { text-align: right; }
+.rhead span:first-child { text-align: left; }
+.mcell { display: grid; justify-items: end; line-height: 1.15; }
+.mcell .mv { font-family: var(--font-data); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.mcell .mv small { font-size: 11px; color: var(--muted); margin-left: 1px; font-weight: 400; }
+.mcell .mk { display: none; font-size: 11px; color: var(--muted); }
+.mcell .mk i, .rhead i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
+.mcell.best .mv { color: var(--accent); }
+.split { display: flex; height: 5px; width: min(160px, 100%); border-radius: 3px; overflow: hidden; margin-top: 5px; background: var(--soft); }
+.split span { display: block; height: 100%; }
+.ractions { display: flex; gap: 6px; justify-content: flex-end; }
+@media (max-width: 720px) {
+  .rhead { display: none; }
+  .rrow { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
+  .rrow .rname { grid-column: 1 / 5; }
+  .rrow .ractions { grid-column: 5; grid-row: 1; }
+  .rrow .mcell { grid-row: 2; justify-items: start; }
+  .mcell .mk { display: block; }
+}
 .rrow .nm { font-weight: 600; }
 .rrow .sub { font-size: 12px; color: var(--muted); }
 .macros { display: flex; flex-wrap: wrap; gap: 4px 12px; font-family: var(--font-data); font-size: 12px; font-variant-numeric: tabular-nums; }
 .macros span i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 4px; }
 .tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px; background: var(--soft); color: var(--muted); margin-left: 6px; }
-@media (max-width: 640px) { .rrow { grid-template-columns: minmax(0, 1fr) auto; } .rrow .macros { grid-column: 1 / -1; grid-row: 2; } }
 
 .form { display: grid; gap: 12px; }
 .fgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
@@ -315,7 +334,7 @@ const state = {
   readOnly: false,
   editing: null,         // recipe id | "new" | null
   importing: false,
-  rsearch: "", rcuisine: ""
+  rsearch: "", rcuisine: "", rsort: lsGet("mpp.rsort") || "cuisine"
 };
 let db = null, poolCache = new Map();
 
@@ -1025,15 +1044,33 @@ function viewRecipes() {
   const all = Object.values(state.recipes);
   const cs = cuisines();
   const q = state.rsearch.toLowerCase();
+  const SORTS = {
+    cuisine: ["Cuisine, then name", (a, b) => a.cuisine.localeCompare(b.cuisine) || a.name.localeCompare(b.name)],
+    name: ["Name (A–Z)", (a, b) => a.name.localeCompare(b.name)],
+    protein: ["Most protein", (a, b) => b.p - a.p],
+    density: ["Most protein per calorie", (a, b) => b.p / (b.cal || 1) - a.p / (a.cal || 1)],
+    cal: ["Fewest calories", (a, b) => a.cal - b.cal],
+    carbs: ["Fewest carbs", (a, b) => a.c - b.c],
+    fat: ["Least fat", (a, b) => a.f - b.f]
+  };
+  const sort = SORTS[state.rsort] ? state.rsort : "cuisine";
   const list = all.filter(r => (!state.rcuisine || r.cuisine === state.rcuisine) && (!q || r.name.toLowerCase().includes(q) || r.ingredients.some(i => i.item.includes(q))))
-    .sort((a, b) => a.cuisine.localeCompare(b.cuisine) || a.name.localeCompare(b.name));
+    .sort((a, b) => SORTS[sort][1](a, b) || a.name.localeCompare(b.name));
   const exCount = all.filter(r => r.example).length;
-  const rows = list.map(r => `<div class="rrow">
-    <div><div class="nm"><button class="linkish" data-action="view" data-id="${esc(r.id)}">${esc(r.name)}</button>${r.example ? `<span class="tag">Example</span>` : ""}</div>
-      <div class="sub">${esc(r.cuisine)} · ${r.meals.map(m => SLOTS.find(s => s[0] === m)[1]).join(", ")} · makes ${r.servings} · ${r.ingredients.length} ingredients</div></div>
-    <div class="macros"><span>${r.cal} kcal</span><span>${macroDot("--protein")}${r.p}g</span><span>${macroDot("--carb")}${r.c}g</span><span>${macroDot("--fat")}${r.f}g</span><span class="muted">per serving</span></div>
-    <div class="row">${state.readOnly ? "" : `<button class="btn small" data-action="edit" data-id="${esc(r.id)}">Edit</button><button class="btn ghost small" data-action="del" data-id="${esc(r.id)}">Delete</button>`}</div>
-  </div>`).join("");
+  const hi = { protein: "p", density: "p", cal: "cal", carbs: "c", fat: "f" }[sort];
+  const fmt = v => +(+v).toFixed(1);
+  const cell = (r, k, label, color, unit) => `<div class="mcell ${hi === k ? "best" : ""}"><span class="mv">${fmt(r[k])}<small>${unit}</small></span><span class="mk">${color ? macroDot(color) : ""}${label}</span></div>`;
+  const rows = list.map(r => {
+    const pc = r.p * 4, cc = r.c * 4, fc = r.f * 9, tot = (pc + cc + fc) || 1;
+    const split = `<div class="split" title="Share of calories: protein ${Math.round(pc / tot * 100)}%, carbs ${Math.round(cc / tot * 100)}%, fat ${Math.round(fc / tot * 100)}%"><span style="width:${pc / tot * 100}%;background:var(--protein)"></span><span style="width:${cc / tot * 100}%;background:var(--carb)"></span><span style="width:${fc / tot * 100}%;background:var(--fat)"></span></div>`;
+    return `<div class="rrow">
+    <div class="rname"><div class="nm"><button class="linkish" data-action="view" data-id="${esc(r.id)}">${esc(r.name)}</button>${r.example ? `<span class="tag">Example</span>` : ""}</div>
+      <div class="sub">${esc(r.cuisine)} · ${r.meals.map(m => SLOTS.find(s => s[0] === m)[1]).join(", ") || "Base recipe"} · makes ${r.servings}</div>${split}</div>
+    ${cell(r, "cal", "Calories", "", "")}${cell(r, "p", "Protein", "--protein", "g")}${cell(r, "c", "Carbs", "--carb", "g")}${cell(r, "f", "Fat", "--fat", "g")}
+    <div class="ractions">${state.readOnly ? "" : `<button class="btn small" data-action="edit" data-id="${esc(r.id)}">Edit</button><button class="btn ghost small" data-action="del" data-id="${esc(r.id)}">Delete</button>`}</div>
+  </div>`;
+  }).join("");
+  const head = `<div class="rhead" aria-hidden="true"><span>${list.length} recipe${list.length === 1 ? "" : "s"} · per serving</span><span>Calories</span><span>${macroDot("--protein")}Protein</span><span>${macroDot("--carb")}Carbs</span><span>${macroDot("--fat")}Fat</span><span></span></div>`;
   return `<div class="grid2" style="grid-template-columns:minmax(0,1fr)">
     ${state.editing ? editorPanel() : ""}
     ${state.importing ? importPanel() : ""}
@@ -1045,9 +1082,10 @@ function viewRecipes() {
       <div class="row">
         <div class="field" style="flex:1;min-width:180px"><input id="rsearch" type="search" placeholder="Search by name or ingredient" value="${esc(state.rsearch)}" aria-label="Search recipes"></div>
         <div class="field"><select id="rcuisine" aria-label="Filter by cuisine"><option value="">All cuisines</option>${cs.map(c => `<option ${state.rcuisine === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>
+        <div class="field"><select id="rsort" aria-label="Sort recipes">${Object.entries(SORTS).map(([k, [label]]) => `<option value="${k}" ${sort === k ? "selected" : ""}>Sort: ${label}</option>`).join("")}</select></div>
       </div>
       ${exCount && !state.readOnly ? `<div class="notice">${exCount} example recipes are loaded so you can try the planner. <button class="btn small" data-action="remove-examples">Remove examples</button></div>` : ""}
-      <div class="rlist">${rows || `<p class="muted">No recipes match.</p>`}</div>
+      <div class="rlist">${rows ? head + rows : `<p class="muted">No recipes match.</p>`}</div>
     </section></div>`;
 }
 
@@ -1383,6 +1421,7 @@ document.addEventListener("change", e => {
     saveSettings(); return render();
   }
   if (t.id === "rcuisine") { state.rcuisine = t.value; return render(); }
+  if (t.id === "rsort") { state.rsort = t.value; lsSet("mpp.rsort", t.value); return render(); }
 });
 document.addEventListener("input", e => {
   if (e.target.id === "rsearch") {
