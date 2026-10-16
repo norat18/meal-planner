@@ -3,17 +3,42 @@
     {
       "site": "short-list-meals",
       "public": "public",
-      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [{ "source": "**", "destination": "/index.html" }],
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ],
       "headers": [
-        { "source": "/index.html", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+        {
+          "source": "**",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        }
       ]
     },
     {
       "site": "macro-prep-planner-nt",
       "public": "public",
-      "ignore": ["**"],
-      "redirects": [{ "source": "**", "destination": "https://short-list-meals.web.app", "type": 301 }]
+      "ignore": [
+        "**"
+      ],
+      "redirects": [
+        {
+          "source": "**",
+          "destination": "https://short-list-meals.web.app",
+          "type": 301
+        }
+      ]
     }
   ],
   "firestore": {
@@ -21,6 +46,10 @@
     "indexes": "firestore.indexes.json"
   },
   "functions": [
-    { "source": "functions", "codebase": "default", "runtime": "nodejs20" }
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "nodejs20"
+    }
   ]
 }

@@ -18,7 +18,7 @@ Short List turns your own recipes into a varied week of meals that share ingredi
 ## Set up Firebase (one time)
 
 1. Create a Firebase project, upgrade it to the Blaze (pay-as-you-go) plan, and set a budget alert.
-2. Enable Authentication → Google, create a Firestore database, and register a Web app; paste its config into `FIREBASE_CONFIG` in `public/index.html`. Live app: https://short-list-meals.web.app (sign-in runs from that address: it's in Auth's authorized domains and the OAuth client's origins and redirect URIs, and the project's public-facing name is Short List).
+2. Enable Authentication → Google, create a Firestore database, and register a Web app; paste its config into `FIREBASE_CONFIG` in `public/index.html`. Live app: https://short-list-meals.web.app (its domain is in Auth's authorized domains; sign-in still runs through macro-prep-planner-nt.firebaseapp.com until the OAuth client lists https://short-list-meals.web.app/__/auth/handler).
 3. Store the Claude API key: `npx firebase-tools@13.29.1 functions:secrets:set ANTHROPIC_API_KEY`
 4. Deploy: `npx firebase-tools@13.29.1 deploy`
 
