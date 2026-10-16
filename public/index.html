@@ -303,6 +303,8 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .seg button { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-weight: 600; font-size: 13px; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .toggle { display: inline-flex; gap: 8px; align-items: center; font-weight: 600; font-size: 14px; }
+.save-status { font-size: 13px; color: var(--muted); min-height: 0; }
+.save-status.warn { color: var(--warn); font-weight: 600; }
 .privacy p { margin: 0; max-width: 68ch; color: var(--muted); font-size: 14px; }
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -317,6 +319,7 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
       <h1>Macro Prep Planner</h1>
       <p>A varied week from your own recipes, one short grocery list.</p>
       <div class="account" id="account"></div>
+      <div class="save-status" id="save-status" role="status" aria-live="polite"></div>
     </div>
     <div class="facts" id="facts" aria-label="Daily target"></div>
   </header>
@@ -937,6 +940,22 @@ function persistLocal() {
   lsSet("mpp.plan", state.plan);
 }
 function stripRecipe(r) { const { _items, ...rest } = r; return rest; }
+// Every write goes through tracked(): the header shows "Saving…" until the server confirms it,
+// and a write that hasn't landed after 20 seconds raises a warning instead of failing silently.
+let pendingWrites = 0, stallTimer = null;
+async function tracked(promise) {
+  pendingWrites++; renderSaveStatus();
+  clearTimeout(stallTimer);
+  stallTimer = setTimeout(() => { if (pendingWrites) { state.saveStalled = true; renderSaveStatus(); } }, 20000);
+  try { return await promise; }
+  catch (e) { writeFailed(e); throw e; }
+  finally { pendingWrites--; if (!pendingWrites) { state.saveStalled = false; clearTimeout(stallTimer); } renderSaveStatus(); }
+}
+function renderSaveStatus() {
+  const el = document.getElementById("save-status"); if (!el) return;
+  el.textContent = state.saveStalled ? "Not saved yet. Check your connection and close other tabs of this app; keep this one open." : pendingWrites ? "Saving…" : "";
+  el.className = state.saveStalled ? "save-status warn" : "save-status";
+}
 function savePlan() {
   clearTimeout(planTimer);
   planTimer = setTimeout(async () => {
@@ -944,7 +963,7 @@ function savePlan() {
     if (state.mode === "local") return persistLocal();
     if (state.mode !== "db" || state.readOnly) return;
     lastPlanJSON = JSON.stringify(state.plan);
-    try { await db.doc("app/plan").set(clone(state.plan)); } catch (e) { writeFailed(e); }
+    try { await tracked(db.doc("app/plan").set(clone(state.plan))); } catch {}
   }, 500);
 }
 function saveSettings() {
@@ -955,24 +974,35 @@ function saveSettings() {
     if (state.mode === "local") return persistLocal();
     if (state.mode !== "db" || state.readOnly) return;
     lastSettingsJSON = JSON.stringify(state.settings);
-    try { await db.doc("app/settings").set(clone(state.settings)); } catch (e) { writeFailed(e); }
+    try { await tracked(db.doc("app/settings").set(clone(state.settings))); } catch {}
   }, 600);
 }
+// Recipes are written in batches of up to 400 (Firestore allows 500), so a big restore lands all at once or not at all.
+// Returns true once the server has confirmed every write.
 async function saveRecipes(list) {
   poolCache.clear();
   for (const r of list) { delete r._items; state.recipes[r.id] = r; }
-  if (state.mode === "local") return persistLocal();
-  if (state.mode !== "db" || state.readOnly) return;
+  if (state.mode === "local") { persistLocal(); return true; }
+  if (state.mode !== "db" || state.readOnly) return false;
   try {
-    for (let i = 0; i < list.length; i += 8) await Promise.all(list.slice(i, i + 8).map(r => db.collection("recipes").doc(r.id).set(stripRecipe(r))));
-  } catch (e) { writeFailed(e); }
+    for (let i = 0; i < list.length; i += 400) {
+      const batch = firebase.firestore().batch();
+      list.slice(i, i + 400).forEach(r => batch.set(db.collection("recipes").doc(r.id), stripRecipe(r)));
+      await tracked(batch.commit());
+    }
+    return true;
+  } catch { return false; }
 }
 async function deleteRecipes(ids) {
   poolCache.clear();
   ids.forEach(id => delete state.recipes[id]);
   if (state.mode === "local") return persistLocal();
   if (state.mode !== "db" || state.readOnly) return;
-  try { for (const id of ids) await db.collection("recipes").doc(id).delete(); } catch (e) { writeFailed(e); }
+  try {
+    const batch = firebase.firestore().batch();
+    ids.forEach(id => batch.delete(db.collection("recipes").doc(id)));
+    await tracked(batch.commit());
+  } catch {}
 }
 function writeFailed(e) {
   console.error(e);
@@ -1000,7 +1030,9 @@ function boot() {
   firebase.initializeApp(FIREBASE_CONFIG);
   auth = firebase.auth();
   const fs = firebase.firestore();
-  fs.enablePersistence({ synchronizeTabs: true }).catch(() => {}); // keeps the list usable in a store with bad signal
+  // Offline cache keeps the list usable in a store with bad signal. Single-tab mode: a second tab runs without the
+  // cache and writes straight to the server, instead of queuing writes behind a background tab that may never send them.
+  fs.enablePersistence({ synchronizeTabs: false }).catch(() => {});
   auth.onAuthStateChanged(async user => {
     unsubs.forEach(u => u()); unsubs = [];
     if (!user) { state.user = null; db = null; state.mode = "signin"; state.recipes = {}; state.plan = emptyPlan(); state.settings = clone(DEFAULT_SETTINGS); render(); return; }
@@ -1094,7 +1126,7 @@ function renderChrome() {
 function needsOnboarding() { return state.mode === "db" && !state.settings.onboarded; }
 
 function render() {
-  renderChrome();
+  renderChrome(); renderSaveStatus();
   const v = document.getElementById("view");
   if (state.mode === "loading") { v.innerHTML = `<div class="empty">Loading your recipes…</div>`; return; }
   if (state.mode === "signin") { v.innerHTML = viewSignIn(); return; }
@@ -1451,10 +1483,13 @@ async function runImport() {
     try { res = parseImport(text, { totals: document.getElementById("imp-totals").checked }); }
     catch (err) { state.importError = `That file didn't parse. Check that it's valid JSON or a CSV with a header row. (${err.message})`; return render(); }
     try { const data = JSON.parse(text); if (data && data.settings && typeof data.settings === "object") { state.settings = mergeSettings({ ...data.settings, onboarded: true }); saveSettings(); } } catch {}
-    if (res.ok.length) await saveRecipes(res.ok);
-    state.importError = res.bad.length ? `Imported ${res.ok.length}. Skipped ${res.bad.length}: ${res.bad.join("; ")}` : "";
+    state.importBusy = true; render();
+    const saved = res.ok.length ? await saveRecipes(res.ok) : true;
+    state.importBusy = false;
+    if (!saved) { state.importError = `Your ${res.ok.length} recipes didn't save to your account. Check your connection, close other tabs of this app, and restore again.`; return render(); }
+    state.importError = res.bad.length ? `Saved ${res.ok.length}. Skipped ${res.bad.length}: ${res.bad.join("; ")}` : "";
     state.importing = !!res.bad.length; render();
-    return toast(`Imported ${res.ok.length} recipe${res.ok.length === 1 ? "" : "s"}.`);
+    return toast(`Saved ${res.ok.length} recipe${res.ok.length === 1 ? "" : "s"} to your account.`);
   }
   if (!window.firebase || !auth) { state.importError = "Import needs the online app. Sign in and try again."; return render(); }
   state.importBusy = true; state.importError = ""; render();
@@ -1889,7 +1924,7 @@ document.addEventListener("submit", async e => {
       mfp: existing ? existing.mfp : undefined,
       portable: document.getElementById("f-portable").checked
     });
-    await saveRecipes([r]);
+    if (!(await saveRecipes([r]))) { toast(`${r.name} didn't save to your account. Check your connection and try again.`); render(); return; }
     if (isDraft) {
       state.drafts.shift();
       if (state.drafts.length) { toast(`Saved ${r.name}. Next one to review.`); render(); window.scrollTo({ top: 0 }); return; }
@@ -1901,6 +1936,8 @@ document.addEventListener("submit", async e => {
     render();
   } catch (err) { toast(`Can't save: the recipe is ${err.message}.`); }
 });
+
+window.addEventListener("beforeunload", e => { if (pendingWrites || planTimer || settingsTimer) { e.preventDefault(); e.returnValue = ""; } });
 
 /* ---------- start ---------- */
 (function init() {
