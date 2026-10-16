@@ -1,6 +1,6 @@
-# Meal Planner
+# Short List
 
-Macro Prep Planner turns your own recipes into a varied week of meals that share ingredients, then builds one short grocery list.
+Short List turns your own recipes into a varied week of meals that share ingredients, then builds one short grocery list.
 
 - **Private library:** sign in with Google; your recipes, plans and settings are visible only to you.
 - **Import:** add recipes from a link, a PDF, a photo, a Word document or pasted text. Claude reads it, and you review and fix every field before saving. You need 15 recipes before the first plan.

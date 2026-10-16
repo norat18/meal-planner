@@ -1,6 +1,6 @@
-# Meal Planner
+# Short List
 
-Macro Prep Planner: a single-file web app (`public/index.html`) hosted on Firebase at https://macro-prep-planner-nt.web.app (project `macro-prep-planner-nt`, owned by ntan.nora@gmail.com, Blaze plan with a $5 budget alert). Each person signs in with Google and gets a private library: their data lives in Firestore under `users/{uid}/` (`recipes/{id}`, `app/settings`, `app/plan`), and `firestore.rules` lets only that user read or write it. Recipe import runs in a Cloud Function (`functions/index.js`, `importRecipe`) that calls the Claude API; the key is the Firebase secret `ANTHROPIC_API_KEY` and must never appear in the HTML or the repo. The old Claude artifact (https://claude.ai/artifact/5A7gHTp8iMiAsQLHve2ewE) is retired; don't republish it.
+Short List (formerly Macro Prep Planner; the repo is still `meal-planner`): a single-file web app (`public/index.html`) hosted on Firebase at https://macro-prep-planner-nt.web.app (project `macro-prep-planner-nt`, owned by ntan.nora@gmail.com, Blaze plan with a $5 budget alert). Each person signs in with Google and gets a private library: their data lives in Firestore under `users/{uid}/` (`recipes/{id}`, `app/settings`, `app/plan`), and `firestore.rules` lets only that user read or write it. Recipe import runs in a Cloud Function (`functions/index.js`, `importRecipe`) that calls the Claude API; the key is the Firebase secret `ANTHROPIC_API_KEY` and must never appear in the HTML or the repo. The old Claude artifact (https://claude.ai/artifact/5A7gHTp8iMiAsQLHve2ewE) is retired; don't republish it.
 
 Product requirements: the Meal Planner PRD (https://claude.ai/artifact/9BXoW42Dy7DLeDKsfsdaY3). Its acceptance criteria are the spec.
 

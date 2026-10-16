@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Macro Prep Planner</title>
+<title>Short List</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -324,7 +324,7 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 <div class="wrap">
   <header class="top">
     <div class="brand">
-      <h1>Macro Prep Planner</h1>
+      <h1>Short List</h1>
       <p>A varied week from your own recipes, one short grocery list.</p>
       <div class="account" id="account"></div>
       <div class="save-status" id="save-status" role="status" aria-live="polite"></div>
@@ -1913,10 +1913,10 @@ function afterGenerate(res, what) {
   else toast(what);
 }
 function exportBackup() {
-  const data = { app: "macro-prep-planner", exported: new Date().toISOString(), settings: state.settings, recipes: Object.values(state.recipes).map(stripRecipe) };
+  const data = { app: "short-list", exported: new Date().toISOString(), settings: state.settings, recipes: Object.values(state.recipes).map(stripRecipe) };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
-  a.download = "meal-planner-backup.json"; a.click();
+  a.download = "short-list-backup.json"; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 function busy(fn) {
