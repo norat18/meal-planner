@@ -563,7 +563,9 @@ function normalizeRecipe(raw, opts = {}) {
     estimated: raw.estimated != null ? !!raw.estimated : raw.macrosEstimated != null ? !!raw.macrosEstimated : /estimat/i.test(String(raw.source || "")),
     ...(raw.source ? { source: String(raw.source) } : {}),
     ...(raw.portable ? { portable: true } : {}),
-    ...(raw.mfp ? { mfp: raw.mfp } : {})
+    ...(raw.mfp ? { mfp: raw.mfp } : {}),
+    ...(raw.mfpBrand ? { mfpBrand: String(raw.mfpBrand) } : {}),
+    ...(raw.mfpName ? { mfpName: String(raw.mfpName) } : {})
   };
 }
 function parseCSV(text) {
@@ -1763,6 +1765,7 @@ function mfpLine(r, x, label) {
 // Only Coach Greg recipes have a barcode MyFitnessPal recognises (the one printed in their pack, r.mfp).
 // Every other recipe exists in MyFitnessPal as a public food named "<brand> <name>", found by search.
 function mfpBrand(r) {
+  if (r.mfpBrand) return r.mfpBrand; // a recipe changed from its source has its own MyFitnessPal food
   const pre = String(r.id).split("-")[0];
   return pre === "st" ? "Strong" : pre === "hp" ? "Coach Greg" : pre === "my" ? "Homemade" : pre === "hf" ? "HelloFresh" : pre === "gc" ? "Green Chef" : pre === "ba" ? "Blue Apron" : "";
 }
@@ -1774,7 +1777,7 @@ function mfpBlock(r, x) {
     ? `<div class="barcode"><svg id="mfp-barcode" role="img" aria-label="MyFitnessPal barcode ${esc(r.mfp.code)}"></svg><span>Scan in MyFitnessPal${portion}</span></div>`
     : "";
   const search = !scan && brand
-    ? `<p class="first-scan">In the MyFitnessPal app, search <b>${esc(brand + " " + r.name)}</b> and add it${portion}.</p>`
+    ? `<p class="first-scan">In the MyFitnessPal app, search <b>${esc(brand + " " + (r.mfpName || r.name))}</b> and add it${portion}.</p>`
     : "";
   return `<div><h3><span>Log in MyFitnessPal</span></h3>
     <div class="mfp-row">${scan}
@@ -2149,6 +2152,8 @@ document.addEventListener("submit", async e => {
       example: existing ? existing.example : false,
       source: existing ? existing.source : isDraft ? "Imported" : undefined,
       mfp: existing ? existing.mfp : undefined,
+      mfpBrand: existing ? existing.mfpBrand : undefined,
+      mfpName: existing ? existing.mfpName : undefined,
       portable: document.getElementById("f-portable").checked
     });
     if (!(await saveRecipes([r]))) { toast(`${r.name} didn't save to your account. Check your connection and try again.`); render(); return; }
