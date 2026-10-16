@@ -2,6 +2,14 @@
 
 Macro Prep Planner: a single-file app (`macro-prep-planner.html`) published as a Claude artifact at https://claude.ai/artifact/5A7gHTp8iMiAsQLHve2ewE. Recipes, targets and the week plan live in the artifact's database, not in this repo.
 
+## Logging meals in MyFitnessPal
+
+MyFitnessPal has no public API, so the app offers two manual paths and Claude can do a third on request:
+
+- **Barcode:** recipes with an `mfp` field (`{format: "UPC" | "UPCE", code}`) show a scannable barcode in the recipe view. These are the codes printed in the Coach Greg packs, decoded from the PDFs' barcode images.
+- **Quick Add copy:** every recipe view and day card can copy calories, carbs, fat and protein (MyFitnessPal's Quick Add field order) at the planned portion.
+- **Claude logs it in Chrome:** when Nora asks (for example "log today's lunch"), read the plan (`app/plan`) and recipes from the artifact database, compute each meal's numbers at its portion (`recipe macros × x`), then use Claude in Chrome on myfitnesspal.com, signed in as Nora, to add each meal to the right Diary section with Quick Add. Show the entries and get her OK before saving each one. Only do this when she asks; never log meals on your own.
+
 ## Git workflow
 
 - After finishing each change the user asks for, commit it and push to GitHub (`origin`, private repo `norat18/meal-planner`, branch `main`) without asking first.

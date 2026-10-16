@@ -210,6 +210,15 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 12px; }
 .steps li { counter-increment: s; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; line-height: 1.55; max-width: 68ch; }
 .steps li::before { content: counter(s); font-family: var(--font-display); font-weight: 800; font-size: 15px; width: 26px; height: 26px; border-radius: 50%; background: var(--soft); color: var(--accent); display: grid; place-items: center; }
+.mfp-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.barcode { background: #FFFFFF; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; display: grid; justify-items: center; gap: 2px; max-width: 100%; }
+.barcode svg { display: block; max-width: 100%; height: auto; }
+.barcode span { font-size: 11px; color: #4A554E; }
+.quick { display: grid; gap: 8px; min-width: 0; flex: 1 1 220px; }
+.quick dl { display: grid; grid-template-columns: repeat(4, auto); gap: 2px 14px; margin: 0; justify-content: start; }
+.quick dt { font-size: 11px; color: var(--muted); }
+.quick dd { margin: 0; font-family: var(--font-data); font-size: 15px; font-variant-numeric: tabular-nums; grid-row: 2; }
+.quick p { margin: 0; font-size: 13px; color: var(--muted); max-width: 52ch; }
 @media (max-width: 560px) {
   .sheet-back { align-items: flex-end; padding-bottom: 0; padding-left: 0; padding-right: 0; }
   .sheet { border-radius: 14px 14px 0 0; max-height: 92%; padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px)); padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
@@ -243,6 +252,7 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 </div>
 <div id="sheet"></div>
 <div class="toast" id="toast" hidden></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
 
 <script>
 /* ---------- constants ---------- */
@@ -950,7 +960,7 @@ function dayCard(d) {
         <option value="">Any cuisine</option>
         ${cs.map(c => `<option value="${esc(c)}" ${day.cuisine === c ? "selected" : ""}>${esc(c)} day</option>`).join("")}
       </select>
-      ${pill}<span class="spacer"></span>${state.readOnly ? "" : action}
+      ${pill}<span class="spacer"></span>${st.filled ? `<button class="btn ghost small" data-action="copy-mfp-day" data-d="${d}" title="Copy each meal's calories and macros for MyFitnessPal Quick Add">Copy for MFP</button>` : ""}${state.readOnly ? "" : action}
     </div>
     <div class="slots">${slots}</div>
     <div class="meters">${meters}</div>
@@ -1149,10 +1159,58 @@ function renderSheet() {
         <button class="close" id="sheet-close" data-action="close-sheet" aria-label="Close recipe">×</button>
       </div>
       <div><h3><span>${x ? "This portion" : "Per serving"}</span></h3><div class="mfacts">${facts}</div></div>
+      ${mfpBlock(r, x)}
       <div><h3><span>Ingredients</span><span style="text-transform:none;letter-spacing:0;font-weight:500">${esc(portionNote)}</span></h3><ul class="ilist">${ings}</ul></div>
       <div><h3><span>Instructions</span></h3>${steps}</div>
       ${state.readOnly ? "" : `<div class="row"><button class="btn small" data-action="edit-from-sheet" data-id="${esc(r.id)}">Edit recipe</button></div>`}
     </div></div>`;
+  drawBarcode(r);
+}
+
+/* ---------- MyFitnessPal ---------- */
+// MyFitnessPal's Quick Add asks for calories, carbs, fat and protein, in that order.
+function mfpNumbers(r, x) {
+  const m = x || 1;
+  return { cal: Math.round(r.cal * m), c: Math.round(r.c * m), f: Math.round(r.f * m), p: Math.round(r.p * m) };
+}
+function mfpLine(r, x, label) {
+  const n = mfpNumbers(r, x);
+  return `${label ? label + ": " : ""}${r.name}${x && x !== 1 ? ` (×${x})` : ""}\n  Calories ${n.cal} · Carbs ${n.c} g · Fat ${n.f} g · Protein ${n.p} g`;
+}
+function mfpBlock(r, x) {
+  const n = mfpNumbers(r, x);
+  const scan = r.mfp && r.mfp.code
+    ? `<div class="barcode"><svg id="mfp-barcode" role="img" aria-label="MyFitnessPal barcode ${esc(r.mfp.code)}"></svg><span>Scan in MyFitnessPal${x && x !== 1 ? `, then set servings to ${x}` : ""}</span></div>`
+    : "";
+  return `<div><h3><span>Log in MyFitnessPal</span></h3>
+    <div class="mfp-row">${scan}
+      <div class="quick">
+        <p>${scan ? "Or use Quick Add" : "Use Quick Add"} with these numbers ${x ? "for this portion" : "per serving"}:</p>
+        <dl><dt>Calories</dt><dd>${n.cal}</dd><dt>Carbs</dt><dd>${n.c} g</dd><dt>Fat</dt><dd>${n.f} g</dd><dt>Protein</dt><dd>${n.p} g</dd></dl>
+        <div class="row"><button class="btn small" data-action="copy-mfp" data-id="${esc(r.id)}" data-x="${x || ""}">Copy for Quick Add</button></div>
+      </div>
+    </div></div>`;
+}
+function drawBarcode(r) {
+  const el = document.getElementById("mfp-barcode");
+  if (!el || !r.mfp) return;
+  try {
+    window.JsBarcode(el, r.mfp.code, { format: r.mfp.format === "UPCE" ? "UPCE" : "UPC", background: "#ffffff", lineColor: "#000000", width: 2, height: 64, margin: 8, fontSize: 14 });
+  } catch { el.closest(".barcode").innerHTML = `<span>Barcode ${esc(r.mfp.code)}: type it into MyFitnessPal's barcode search</span>`; }
+}
+async function copyText(text, okMsg) {
+  try { await navigator.clipboard.writeText(text); toast(okMsg); }
+  catch { toast("Copying isn't allowed here. The numbers are shown on the recipe instead."); }
+}
+function mfpDayText(d) {
+  const day = state.plan.days[d], lines = [];
+  for (const s of activeSlots()) {
+    const c = day.slots[s], r = c && state.recipes[c.id];
+    if (r) lines.push(mfpLine(r, c.x || 1, SLOTS.find(x => x[0] === s)[1]));
+  }
+  const st = dayStatus(d);
+  lines.push(`Total: Calories ${Math.round(st.tot.cal)} · Carbs ${Math.round(st.tot.c)} g · Fat ${Math.round(st.tot.f)} g · Protein ${Math.round(st.tot.p)} g`);
+  return `${DAYS[d]} for MyFitnessPal Quick Add\n` + lines.join("\n");
 }
 document.addEventListener("keydown", e => { if (e.key === "Escape" && viewing) closeRecipe(); });
 
@@ -1212,6 +1270,8 @@ document.addEventListener("click", async e => {
   const a = b.dataset.action, d = +b.dataset.d, S = state.settings;
   if (a === "close-sheet") { if (e.target === b || b.id === "sheet-close") closeRecipe(); return; }
   if (a === "view") return openRecipe(b.dataset.id, b.dataset.x, b);
+  if (a === "copy-mfp") { const r = state.recipes[b.dataset.id]; if (r) copyText(mfpLine(r, b.dataset.x ? +b.dataset.x : null), "Copied. Paste into MyFitnessPal Quick Add."); return; }
+  if (a === "copy-mfp-day") return copyText(mfpDayText(d), `Copied ${DAYS[d]}'s meals for MyFitnessPal.`);
   if (state.readOnly && !["goto","copy-list"].includes(a)) return;
   switch (a) {
     case "edit-from-sheet": viewing = null; renderSheet(); state.editing = b.dataset.id; state.importing = false; state.tab = "recipes"; render(); window.scrollTo({ top: 0 }); return;
