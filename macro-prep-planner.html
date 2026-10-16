@@ -1242,7 +1242,7 @@ function mfpLine(r, x, label) {
 // Every other recipe exists in MyFitnessPal as a public food named "<brand> <name>", found by search.
 function mfpBrand(r) {
   const pre = String(r.id).split("-")[0];
-  return pre === "st" ? "Strong" : pre === "hp" ? "Coach Greg" : pre === "my" ? "Homemade" : "";
+  return pre === "st" ? "Strong" : pre === "hp" ? "Coach Greg" : pre === "my" ? "Homemade" : pre === "hf" ? "HelloFresh" : "";
 }
 function mfpBlock(r, x) {
   const n = mfpNumbers(r, x);
