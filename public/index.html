@@ -45,6 +45,9 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+img { max-width: 100%; }
 body {
   background: var(--bg); color: var(--ink);
   font: 15px/1.5 var(--font-body);
@@ -339,7 +342,16 @@ const STAPLE = "Pantry staples";
 const MACROS = [["cal","Calories","kcal","--accent"],["p","Protein","g","--protein"],["c","Carbs","g","--carb"],["f","Fat","g","--fat"]];
 
 // Firebase web config. Not a secret: access is controlled by sign-in and firestore.rules.
-const FIREBASE_CONFIG = null;
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCPF_3ka3P5g7vG3ByDbGxSbb8I-ujS7wc",
+  authDomain: "macro-prep-planner-nt.firebaseapp.com",
+  projectId: "macro-prep-planner-nt",
+  storageBucket: "macro-prep-planner-nt.firebasestorage.app",
+  messagingSenderId: "546954714888",
+  appId: "1:546954714888:web:04c705faa6d083736056bd"
+};
+// Local preview (localhost) keeps using browser storage so testing never touches real accounts.
+const USE_FIREBASE = !/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || /[?&]firebase\b/.test(location.search);
 const MIN_RECIPES = 15;
 
 const DEFAULT_SETTINGS = {
@@ -984,7 +996,7 @@ function mergePlan(p) {
 // Without a Firebase config (local development) the app runs on browser storage.
 let auth = null, unsubs = [];
 function boot() {
-  if (!FIREBASE_CONFIG || !window.firebase) { state.mode = "local"; loadLocal(); render(); return; }
+  if (!FIREBASE_CONFIG || !USE_FIREBASE || !window.firebase) { state.mode = "local"; loadLocal(); render(); return; }
   firebase.initializeApp(FIREBASE_CONFIG);
   auth = firebase.auth();
   const fs = firebase.firestore();
