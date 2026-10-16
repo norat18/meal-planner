@@ -123,6 +123,7 @@ nav.tabs .count { font-family: var(--font-data); font-size: 12px; color: var(--m
 .slot select { width: 100%; min-width: 0; border: 0; background: transparent; font-weight: 600; font-size: 14px; padding: 2px 0; cursor: pointer; text-overflow: ellipsis; }
 .slot-meta { font-size: 12px; color: var(--muted); font-family: var(--font-data); font-variant-numeric: tabular-nums; }
 .slot-meta b { color: var(--ink); font-weight: 500; }
+.slot-link { font-size: 11.5px; color: var(--accent); margin-top: 2px; }
 
 .meters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .meter { display: grid; gap: 4px; min-width: 0; }
@@ -302,8 +303,12 @@ const DEFAULT_SETTINGS = {
   targets: { cal: 2000, p: 150, c: 200, f: 67 },
   tol: { cal: 5, p: 10, c: 15, f: 15 },
   slots: { breakfast: true, lunch: true, dinner: true, snack: true },
-  maxRepeat: 3, portionMin: 0.5, portionMax: 2, cuisines: [], seeded: false
+  maxRepeat: 3, portionMin: 0.5, portionMax: 2, cuisines: [], seeded: false,
+  leftovers: true,   // each dinner is cooked once and eaten again as the next day's lunch
+  bfRotation: true   // three breakfasts a week: Mon–Tue, Wed–Thu, Fri–Sun (Fri–Sun must be car-friendly)
 };
+const BF_GROUPS = [[0, 1], [2, 3], [4, 5, 6]];
+const CAR_GROUP = 2;
 
 /* Example recipes. Macros are per serving; ingredient amounts are for the whole recipe. */
 const EXAMPLES = [
@@ -461,7 +466,9 @@ function normalizeRecipe(raw, opts = {}) {
     meals: normMeals(pick(raw, ["meals","meal","mealType","meal_type","type","course"])),
     servings, cal: Math.round(cal), p: +p.toFixed(1), c: +c.toFixed(1), f: +f.toFixed(1),
     ingredients: ings, steps, example: !!raw.example,
-    ...(raw.source ? { source: String(raw.source) } : {})
+    ...(raw.source ? { source: String(raw.source) } : {}),
+    ...(raw.portable ? { portable: true } : {}),
+    ...(raw.mfp ? { mfp: raw.mfp } : {})
   };
 }
 function parseCSV(text) {
@@ -636,7 +643,124 @@ function weekScore(choices) {
   for (const v of rep.values()) if (v > max) pen += (v - max) * 40;
   return g + 0.6 * err + pen;
 }
+/* ---------- linked meals (leftovers + breakfast rotation) ---------- */
+function linkMode() {
+  const S = state.settings, act = activeSlots();
+  return { lo: !!S.leftovers && act.includes("lunch") && act.includes("dinner"), bf: !!S.bfRotation && act.includes("breakfast") };
+}
+function bfGroup(d) { return BF_GROUPS.findIndex(g => g.includes(d)); }
+// Every slot that must hold the same recipe as [d, s], including itself.
+function linkedSlots(d, s) {
+  const L = linkMode();
+  if (s === "dinner" && L.lo) return [[d, "dinner"], [(d + 1) % 7, "lunch"]];
+  if (s === "lunch" && L.lo) return [[(d + 6) % 7, "dinner"], [d, "lunch"]];
+  if (s === "breakfast" && L.bf) return BF_GROUPS[bfGroup(d)].map(x => [x, "breakfast"]);
+  return [[d, s]];
+}
+function isCarDay(d, s) { return s === "breakfast" && linkMode().bf && bfGroup(d) === CAR_GROUP; }
+function carFriendly(ids) { const c = ids.filter(id => state.recipes[id] && state.recipes[id].portable); return c.length ? c : ids; }
+function slotChoices(d, s) {
+  const ids = eligibleIds(s, state.plan.days[d].cuisine);
+  return isCarDay(d, s) ? carFriendly(ids) : ids;
+}
+// The week as a set of cooking decisions ("vars"); each var fills one or more slots.
+function weekVars() {
+  const act = activeSlots(), L = linkMode(), vars = [];
+  if (act.includes("breakfast")) {
+    if (L.bf) BF_GROUPS.forEach((g, gi) => vars.push({ kind: "bf", cook: g[0], slots: g.map(x => [x, "breakfast"]) }));
+    else DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, "breakfast"]] }));
+  }
+  if (L.lo) DAYS.forEach((_, d) => vars.push({ kind: "din", cook: d, slots: [[d, "dinner"], [(d + 1) % 7, "lunch"]] }));
+  else for (const s of ["lunch", "dinner"]) if (act.includes(s)) DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, s]] }));
+  for (const s of act.filter(s => !["breakfast", "lunch", "dinner"].includes(s))) DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, s]] }));
+  vars.forEach(v => {
+    const [d0, s0] = v.slots[0];
+    let c = slotChoices(d0, s0);
+    if (v.kind === "bf") for (const [d, s] of v.slots.slice(1)) { const o = new Set(slotChoices(d, s)); const both = c.filter(id => o.has(id)); if (both.length) c = both; }
+    v.cands = c;
+    const cur = v.slots.map(([d, s]) => state.plan.days[d].slots[s]).filter(x => x && state.recipes[x.id]);
+    v.locked = cur.find(x => x.locked);
+    v.current = cur.length ? cur[0].id : null;
+  });
+  return vars;
+}
+function generateLinked(mode, days) {
+  const act = activeSlots(), vars = weekVars(), inDays = new Set(days);
+  vars.forEach(v => {
+    const touches = v.slots.some(([d]) => inDays.has(d));
+    const emptyHere = v.slots.some(([d, s]) => inDays.has(d) && !(state.plan.days[d].slots[s] && state.recipes[state.plan.days[d].slots[s].id]));
+    v.free = !v.locked && touches && (inDays.has(v.cook) || emptyHere) && v.cands.length > 0;
+    v.val = v.locked ? v.locked.id : v.free ? null : v.current;
+  });
+  const free = vars.filter(v => v.free);
+  // day -> var index per active slot
+  const slotVar = DAYS.map(() => ({}));
+  vars.forEach((v, i) => v.slots.forEach(([d, s]) => { slotVar[d][s] = i; }));
+  const memo = new Map();
+  const daySolve = (vals, d) => {
+    const ids = act.map(s => vals[slotVar[d][s]]);
+    if (ids.some(id => !id)) return null;
+    const k = ids.join("|");
+    if (!memo.has(k)) memo.set(k, solve(ids.map(id => state.recipes[id])));
+    return memo.get(k);
+  };
+  const lean = mode !== "random";
+  const score = vals => {
+    let err = 0, bad = 0;
+    for (let d = 0; d < 7; d++) { const s = daySolve(vals, d); if (!s) { bad += 2; continue; } err += s.err; if (!s.feasible) bad++; }
+    const uses = new Map(), dayUses = new Map(), items = new Map();
+    vals.forEach((id, i) => {
+      if (!id) return;
+      const v = vars[i];
+      if (v.kind !== "one") uses.set(id, (uses.get(id) || 0) + 1);
+      else dayUses.set(id, (dayUses.get(id) || 0) + 1);
+      if (lean) for (const [k, w] of recipeItems(state.recipes[id])) items.set(k, w);
+    });
+    let pen = 0;
+    for (const n of uses.values()) if (n > 1) pen += (n - 1) * 25;
+    for (const n of dayUses.values()) if (n > state.settings.maxRepeat) pen += (n - state.settings.maxRepeat) * 40;
+    let g = 0; for (const w of items.values()) g += w;
+    return g + 0.6 * err + 30 * bad + pen;
+  };
+  const rnd = v => v.cands[Math.floor(Math.random() * v.cands.length)];
+  let best = vars.map(v => v.val), bestS = Infinity;
+  if (free.length) {
+    const restarts = lean ? 4 : 6, iters = lean ? 4000 : 2500;
+    const allOn = vals => DAYS.every((_, d) => { const s = daySolve(vals, d); return s && s.feasible; });
+    for (let r = 0; r < restarts; r++) {
+      const cur = vars.map(v => v.free ? rnd(v) : v.val);
+      let s = score(cur), T = lean ? 4 : 2;
+      for (let it = 0; it < iters; it++) {
+        const v = free[Math.floor(Math.random() * free.length)], i = vars.indexOf(v);
+        const old = cur[i]; cur[i] = rnd(v);
+        const ns = score(cur);
+        if (ns <= s || Math.random() < Math.exp((s - ns) / T)) s = ns; else cur[i] = old;
+        T *= 0.999;
+      }
+      if (s < bestS) { bestS = s; best = cur.slice(); }
+      if (!lean && allOn(best)) break;
+    }
+  }
+  // Write the chosen recipes, then portions for every day they touch.
+  const touched = new Set(days);
+  free.forEach(v => v.slots.forEach(([d]) => touched.add(d)));
+  vars.forEach((v, i) => {
+    if (!v.free) return;
+    v.slots.forEach(([d, s]) => {
+      const prev = state.plan.days[d].slots[s];
+      state.plan.days[d].slots[s] = { id: best[i], x: 1, locked: !!(prev && prev.locked && prev.id === best[i]) };
+    });
+  });
+  touched.forEach(d => rebalance(d));
+  const skipped = days.filter(d => act.some(s => !best[slotVar[d][s]]));
+  const offTarget = days.filter(d => !skipped.includes(d) && !dayStatus(d).feasible);
+  return { skipped, offTarget };
+}
 function generate(mode, days) {
+  const L = linkMode();
+  return L.lo || L.bf ? generateLinked(mode, days) : generateDaily(mode, days);
+}
+function generateDaily(mode, days) {
   const pools = {}, skipped = [], offTarget = [];
   for (const d of days) {
     pools[d] = dayPool(d);
@@ -958,7 +1082,7 @@ function viewPlan() {
       <button class="btn ghost small" data-action="clear-unlocked">Clear unpinned</button>
       <button class="btn ghost small" data-action="clear-all">Clear all</button>
     </div>
-    <p class="hint">Pick any meal yourself and it gets pinned. The planner keeps pinned meals, fills the rest, and scales portions so each day stays within your tolerance.</p>
+    <p class="hint">Pick any meal yourself and it gets pinned. The planner keeps pinned meals, fills the rest, and scales portions so each day stays within your tolerance.${linkMode().lo ? " Each dinner comes back as the next day's lunch." : ""}${linkMode().bf ? " Breakfast repeats Mon–Tue, Wed–Thu and Fri–Sun, with car-friendly picks for Fri–Sun." : ""}</p>
   </section>
   <div class="week">${days}</div>`;
 }
@@ -1005,7 +1129,15 @@ function dayCard(d) {
 function slotCell(d, s) {
   const day = state.plan.days[d], c = day.slots[s], r = c && state.recipes[c.id];
   const label = SLOTS.find(x => x[0] === s)[1];
-  const ids = eligibleIds(s, day.cuisine);
+  const L = linkMode();
+  const ids = s === "lunch" && L.lo ? eligibleIds("dinner", state.plan.days[(d + 6) % 7].cuisine) : slotChoices(d, s);
+  let link = "";
+  if (s === "lunch" && L.lo) link = `Leftovers from ${DAYS[(d + 6) % 7]}'s dinner`;
+  else if (s === "dinner" && L.lo) link = `Makes ${DAYS[(d + 1) % 7]}'s lunch too`;
+  else if (s === "breakfast" && L.bf) {
+    const g = BF_GROUPS[bfGroup(d)];
+    link = `Same breakfast ${DAYS[g[0]].slice(0, 3)}–${DAYS[g[g.length - 1]].slice(0, 3)}${bfGroup(d) === CAR_GROUP ? " · car-friendly" : ""}`;
+  }
   if (r && !ids.includes(r.id)) ids.unshift(r.id);
   const byC = {};
   ids.forEach(id => { const x = state.recipes[id]; (byC[x.cuisine] = byC[x.cuisine] || []).push(x); });
@@ -1020,7 +1152,7 @@ function slotCell(d, s) {
     <select id="sl-${d}-${s}" data-d="${d}" data-s="${s}" aria-label="${DAYS[d]} ${label}" ${state.readOnly ? "disabled" : ""}>
       <option value="">— Empty —</option>${opts}
     </select>
-    <div class="slot-meta">${meta}</div>
+    <div class="slot-meta">${meta}</div>${link ? `<div class="slot-link">${esc(link)}</div>` : ""}
   </div>`;
 }
 
@@ -1087,7 +1219,7 @@ function viewRecipes() {
     const split = `<div class="split" title="Share of calories: protein ${Math.round(pc / tot * 100)}%, carbs ${Math.round(cc / tot * 100)}%, fat ${Math.round(fc / tot * 100)}%"><span style="width:${pc / tot * 100}%;background:var(--protein)"></span><span style="width:${cc / tot * 100}%;background:var(--carb)"></span><span style="width:${fc / tot * 100}%;background:var(--fat)"></span></div>`;
     return `<div class="rrow">
     <div class="rname"><div class="nm"><button class="linkish" data-action="view" data-id="${esc(r.id)}">${esc(r.name)}</button>${r.example ? `<span class="tag">Example</span>` : ""}</div>
-      <div class="sub">${esc(r.cuisine)} · ${r.meals.map(m => SLOTS.find(s => s[0] === m)[1]).join(", ") || "Base recipe"} · makes ${r.servings}</div>${split}</div>
+      <div class="sub">${esc(r.cuisine)} · ${r.meals.map(m => SLOTS.find(s => s[0] === m)[1]).join(", ") || "Base recipe"} · makes ${r.servings}${r.portable ? " · car-friendly" : ""}</div>${split}</div>
     ${macroSummary(r, 1, hi)}
     <div class="ractions">${state.readOnly ? "" : `<button class="btn small" data-action="edit" data-id="${esc(r.id)}">Edit</button><button class="btn ghost small" data-action="del" data-id="${esc(r.id)}">Delete</button>`}</div>
   </div>`;
@@ -1123,7 +1255,7 @@ function editorPanel() {
         <div class="field"><label for="f-cuisine">Cuisine</label><input id="f-cuisine" list="cuisine-list" value="${esc(r.cuisine)}" placeholder="e.g. Mexican"><datalist id="cuisine-list">${cuisines().map(c => `<option value="${esc(c)}">`).join("")}</datalist></div>
         <div class="field"><label for="f-serv">Servings it makes</label><input id="f-serv" type="number" min="1" step="1" required value="${r.servings}"></div>
       </div>
-      <div class="field"><span class="label">Good for</span><div class="checks">${SLOTS.map(([k, l]) => `<label><input type="checkbox" id="f-meal-${k}" ${r.meals.includes(k) ? "checked" : ""}> ${l}</label>`).join("")}</div></div>
+      <div class="field"><span class="label">Good for</span><div class="checks">${SLOTS.map(([k, l]) => `<label><input type="checkbox" id="f-meal-${k}" ${r.meals.includes(k) ? "checked" : ""}> ${l}</label>`).join("")}<label><input type="checkbox" id="f-portable" ${r.portable ? "checked" : ""}> Car-friendly</label></div></div>
       <div class="fgrid">
         <div class="field"><label for="f-cal">Calories per serving</label><input id="f-cal" type="number" min="0" value="${r.cal}" placeholder="from macros"></div>
         <div class="field"><label for="f-p">Protein (g)</label><input id="f-p" type="number" min="0" step="0.1" required value="${r.p}"></div>
@@ -1342,6 +1474,12 @@ function viewTargets() {
         <div class="field"><label for="maxrep">Max days per recipe</label><input id="maxrep" type="number" min="1" max="7" step="1" data-setting="maxRepeat" value="${S.maxRepeat}" ${dis}></div>
       </div>
       <p class="hint">Allowing a recipe on more days means fewer groceries and more batch cooking. Lower it for more variety.</p>
+      <h2>Cook once, eat twice</h2>
+      <div class="checks" style="flex-direction:column;align-items:flex-start;gap:8px">
+        <label><input type="checkbox" data-flag="leftovers" ${S.leftovers ? "checked" : ""} ${dis}> Each dinner is next day's lunch (Sunday's dinner is Monday's lunch)</label>
+        <label><input type="checkbox" data-flag="bfRotation" ${S.bfRotation ? "checked" : ""} ${dis}> Three breakfasts a week: Mon–Tue, Wed–Thu, Fri–Sun (Fri–Sun car-friendly)</label>
+      </div>
+      <p class="hint">Mark a recipe "Car-friendly" in its editor to make it eligible for Friday–Sunday breakfasts. Portions can still differ between the two meals so each day stays on target.</p>
     </section></div>`;
 }
 
@@ -1405,7 +1543,9 @@ document.addEventListener("click", async e => {
       state.plan = { ...emptyPlan(), checked: {} }; savePlan(); return render();
     case "lock": {
       const c = state.plan.days[d].slots[b.dataset.s]; if (!c) return;
-      c.locked = !c.locked; savePlan(); return render();
+      const to = !c.locked;
+      for (const [ld, ls] of linkedSlots(d, b.dataset.s)) { const o = state.plan.days[ld].slots[ls]; if (o && o.id === c.id) o.locked = to; }
+      savePlan(); return render();
     }
     case "copy-list": {
       const { items } = groceries();
@@ -1465,8 +1605,12 @@ document.addEventListener("change", e => {
   if (state.readOnly) return;
   if (t.matches("select[data-s]")) {
     const d = +t.dataset.d, s = t.dataset.s, day = state.plan.days[d];
-    if (t.value) day.slots[s] = { id: t.value, x: 1, locked: true }; else delete day.slots[s];
-    rebalance(d); savePlan(); return render();
+    const linked = linkedSlots(d, s);
+    for (const [ld, ls] of linked) {
+      if (t.value) state.plan.days[ld].slots[ls] = { id: t.value, x: 1, locked: true }; else delete state.plan.days[ld].slots[ls];
+    }
+    new Set(linked.map(([ld]) => ld)).forEach(ld => rebalance(ld));
+    savePlan(); return render();
   }
   if (t.matches("select[data-daycuisine]")) {
     state.plan.days[+t.dataset.daycuisine].cuisine = t.value; savePlan();
@@ -1483,6 +1627,7 @@ document.addEventListener("change", e => {
   const S = state.settings;
   if (t.matches("[data-target]")) { const v = parseFloat(t.value); if (v >= 0) { S.targets[t.dataset.target] = v; saveSettings(); render(); } return; }
   if (t.matches("[data-tol]")) { const v = parseFloat(t.value); if (v > 0) { S.tol[t.dataset.tol] = v; saveSettings(); render(); } return; }
+  if (t.matches("[data-flag]")) { S[t.dataset.flag] = t.checked; saveSettings(); poolCache.clear(); return render(); }
   if (t.matches("[data-mslot]")) { S.slots[t.dataset.mslot] = t.checked; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
   if (t.matches("[data-setting]")) {
     const v = parseFloat(t.value); if (!(v > 0)) return;
@@ -1514,7 +1659,9 @@ document.addEventListener("submit", async e => {
       ingredients: val("f-ing").split("\n").filter(l => l.trim()),
       steps: val("f-steps").split("\n").filter(l => l.trim()),
       example: state.editing !== "new" && state.recipes[state.editing]?.example,
-      source: state.editing !== "new" ? state.recipes[state.editing]?.source : undefined
+      source: state.editing !== "new" ? state.recipes[state.editing]?.source : undefined,
+      mfp: state.editing !== "new" ? state.recipes[state.editing]?.mfp : undefined,
+      portable: document.getElementById("f-portable").checked
     });
     await saveRecipes([r]);
     state.editing = null; toast(`Saved ${r.name}.`); render();

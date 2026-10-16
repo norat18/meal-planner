@@ -3,6 +3,7 @@
 Macro Prep Planner is a single-page app for planning a week of meals that hits your daily calorie and macro targets, then building one combined grocery list.
 
 - **Week plan:** pick meals yourself (they get pinned), or generate a week with "Plan a lean grocery week" (reuses ingredients to keep the list short) or "Surprise me" (random). Portions scale in quarter-serving steps so every day lands inside your tolerance band.
+- **Cook once, eat twice:** every dinner comes back as the next day's lunch. Breakfast rotates three times a week (Mon–Tue, Wed–Thu, Fri–Sun), and the Fri–Sun pick is always car-friendly. Both rules can be switched off under Targets.
 - **Cuisines:** filter the whole week, or make any single day a cuisine day.
 - **Groceries:** amounts are combined across the week and grouped by aisle, with a prep list of how many batches to cook.
 - **Recipes:** click any recipe for its ingredients and step-by-step instructions. Add, edit or import recipes (JSON or CSV).

@@ -2,6 +2,12 @@
 
 Macro Prep Planner: a single-file app (`macro-prep-planner.html`) published as a Claude artifact at https://claude.ai/artifact/5A7gHTp8iMiAsQLHve2ewE. Recipes, targets and the week plan live in the artifact's database, not in this repo.
 
+## How the week is planned
+
+- **Leftovers:** each dinner is cooked once and eaten again as the next day's lunch (Sunday's dinner is Monday's lunch). Setting `leftovers` turns this on and it is on by default. Picking, pinning or clearing either slot changes both. Portions may differ between the two meals so each day still hits its targets.
+- **Breakfast rotation:** setting `bfRotation`, also on by default, gives three breakfasts a week: Mon–Tue, Wed–Thu and Fri–Sun. Fri–Sun breakfasts must be car-friendly: recipes with `portable: true`, which covers handhelds like burritos, wraps, muffins, bagel or English-muffin sandwiches, plus drinkable smoothies and shakes. Tag new car-friendly breakfasts with `portable: true`.
+- Recipe ids by source: `st-` Strong, `hp-` Coach Greg, `my-` Homemade, `hf-` HelloFresh, `gc-` Green Chef, `ba-` Blue Apron, plus the monthly pack prefixes (`bk-`, `jan-`, `oct-` and so on).
+
 ## Logging meals in MyFitnessPal
 
 MyFitnessPal has no public API, so the app offers two manual paths and Claude can do a third on request:
