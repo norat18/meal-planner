@@ -1401,7 +1401,7 @@ function importPanel() {
   const body = {
     url: `<div class="field"><label for="imp-url">Recipe link</label><input id="imp-url" type="url" placeholder="https://www.example.com/recipes/chicken-tacos"></div>`,
     file: `<div class="field"><label for="imp-file">PDF, photo, Word document or text file (up to 8 MB)</label><input id="imp-file" type="file" accept="application/pdf,image/*,.docx,.txt,.md"></div><p class="hint">A photo of a recipe card works. One file can hold several recipes; you'll review each one.</p>`,
-    text: `<div class="field"><label for="imp-paste">Paste a recipe</label><textarea class="code" id="imp-paste" style="font-family:var(--font-body);font-size:14px" placeholder="Paste the recipe text, including ingredients and steps"></textarea></div>`,
+    text: `${state.blockedUrl ? `<p class="hint"><a href="${esc(state.blockedUrl)}" target="_blank" rel="noopener">Open the recipe page</a>, press Cmd+A then Cmd+C, and paste it below. Ads and comments are fine; only the recipe is kept.</p>` : ""}<div class="field"><label for="imp-paste">Paste a recipe</label><textarea class="code" id="imp-paste" style="font-family:var(--font-body);font-size:14px" placeholder="Paste the recipe text, including ingredients and steps"></textarea></div>`,
     backup: `<div class="field"><label for="imp-backup">Backup file (JSON or CSV)</label><input id="imp-backup" type="file" accept=".json,.csv,application/json,text/csv"></div>
       <label class="checks"><label><input type="checkbox" id="imp-totals"> Macros are for the whole recipe, not per serving</label></label>
       <p class="hint">For moving a library you already have. Recipes are saved as they are, without a review step.</p>`
@@ -1460,13 +1460,15 @@ async function runImport() {
   state.importBusy = true; state.importError = ""; render();
   try {
     payload.known = knownIngredients().slice(0, 600);
-    const call = firebase.functions().httpsCallable("importRecipe", { timeout: 130000 });
+    const call = firebase.functions().httpsCallable("importRecipe", { timeout: 300000 });
     const { data } = await call(payload);
     const drafts = (data.recipes || []).map(x => { try { return normalizeRecipe({ ...x, estimated: x.macrosEstimated }); } catch { return null; } }).filter(Boolean);
     if (!drafts.length) throw new Error("No recipe was found in that. Try another file, or enter it by hand.");
     state.drafts = drafts; state.draftTotal = drafts.length; state.editing = "draft";
   } catch (e) {
     state.importError = (e && e.message && !/^internal$/i.test(e.message)) ? e.message : "The import didn't work. Try again, or enter the recipe by hand.";
+    // Sites that refuse automatic import: switch to pasting the page, with a link to open it.
+    if (e && e.details && e.details.blocked) { state.importMode = "text"; state.blockedUrl = e.details.url || payload.url; }
   }
   state.importBusy = false; render(); window.scrollTo({ top: 0 });
 }
@@ -1712,7 +1714,7 @@ document.addEventListener("click", async e => {
       toast(a === "have" ? "Hidden from your lists. Find it under Items you already have." : "Added back to your list.");
       return render();
     }
-    case "imp-mode": state.importMode = b.dataset.m; state.importError = ""; return render();
+    case "imp-mode": state.importMode = b.dataset.m; state.importError = ""; state.blockedUrl = ""; return render();
     case "do-import": return runImport();
     case "manual-entry": state.importError = ""; state.importing = false; state.editing = "new"; render(); document.getElementById("f-name")?.focus(); return;
     case "add-ing": {
