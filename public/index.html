@@ -1,5 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Macro Prep Planner</title>
-<meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -267,13 +271,49 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
   max-width: calc(100vw - 32px); box-shadow: 0 6px 24px rgba(0,0,0,.18);
 }
 @media (prefers-reduced-motion: no-preference) { .day { transition: border-color .2s; } }
-</style>
 
+/* Sign-in, onboarding, gate */
+.hero { max-width: 560px; margin: 6vh auto 0; text-align: left; }
+.hero h2 { font-size: clamp(24px, 4vw, 32px); font-weight: 800; letter-spacing: -.01em; }
+.hero p { color: var(--muted); max-width: 52ch; }
+.account { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.gate { display: grid; gap: 10px; }
+.progress { height: 10px; border-radius: 5px; background: var(--soft); overflow: hidden; max-width: 420px; }
+.progress span { display: block; height: 100%; background: var(--accent); }
+.est { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--soft); color: var(--carb); margin-left: 6px; white-space: nowrap; }
+.ctag { font-size: 11px; color: var(--muted); }
+.cooked { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+.cooked select { width: auto; font-weight: 500; font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 2px; }
+.have-btn { background: none; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; padding: 2px 8px; cursor: pointer; color: var(--muted); white-space: nowrap; }
+.have-btn:hover { color: var(--ink); border-color: var(--accent); }
+.gitem { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.gitem .used { grid-column: 2 / -1; }
+.ing-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ing-wrap { overflow-x: auto; }
+.ing-table th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 4px; white-space: nowrap; }
+.ing-table td { padding: 3px 4px; vertical-align: top; }
+.ing-table input, .ing-table select { width: 100%; min-width: 60px; border: 1px solid var(--line); background: var(--bg); border-radius: 5px; padding: 5px 6px; font-size: 13px; }
+.ing-table td.q input { min-width: 56px; } .ing-table td.it input { min-width: 150px; } .ing-table td.pr input { min-width: 90px; }
+.ing-table .orig { font-size: 11px; color: var(--muted); padding: 0 4px 6px; }
+.rm { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; padding: 4px 6px; }
+.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg button { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-weight: 600; font-size: 13px; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.toggle { display: inline-flex; gap: 8px; align-items: center; font-weight: 600; font-size: 14px; }
+.privacy p { margin: 0; max-width: 68ch; color: var(--muted); font-size: 14px; }
+</style>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
+</head>
+<body>
 <div class="wrap">
   <header class="top">
     <div class="brand">
       <h1>Macro Prep Planner</h1>
-      <p>Plan a week that hits your numbers, then shop once.</p>
+      <p>A varied week from your own recipes, one short grocery list.</p>
+      <div class="account" id="account"></div>
     </div>
     <div class="facts" id="facts" aria-label="Daily target"></div>
   </header>
@@ -296,13 +336,22 @@ const SLOTS = [["breakfast","Breakfast"],["lunch","Lunch"],["dinner","Dinner"],[
 const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const CATS = ["Produce","Meat & Seafood","Dairy & Eggs","Grains & Bread","Canned & Jarred","Frozen","Other","Pantry staples"];
 const STAPLE = "Pantry staples";
-const STAPLE_WEIGHT = 0.2;
 const MACROS = [["cal","Calories","kcal","--accent"],["p","Protein","g","--protein"],["c","Carbs","g","--carb"],["f","Fat","g","--fat"]];
 
+// Firebase web config. Not a secret: access is controlled by sign-in and firestore.rules.
+const FIREBASE_CONFIG = null;
+const MIN_RECIPES = 15;
+
 const DEFAULT_SETTINGS = {
+  useTargets: false, // calorie and macro targets are optional
   targets: { cal: 2000, p: 150, c: 200, f: 67 },
-  tol: { cal: 5, p: 10, c: 15, f: 15 },
+  tol: { cal: 10, p: 10, c: 10, f: 10 },
   slots: { breakfast: true, lunch: true, dinner: true, snack: true },
+  household: 1,      // people cooked for; scales recipe amounts and the grocery list
+  minimize: false,   // "Minimize groceries": relax the 2-cuisine rule to cut ingredients
+  have: [],          // ingredient keys marked "I already have this"
+  planLog: [],       // when full weeks were generated (in-app signal: returned next week)
+  onboarded: false,
   maxRepeat: 3, portionMin: 0.5, portionMax: 2, cuisines: [], seeded: false,
   leftovers: true,   // each dinner is cooked once and eaten again as the next day's lunch
   bfRotation: true   // three breakfasts a week: Mon–Tue, Wed–Thu, Fri–Sun (Fri–Sun must be car-friendly)
@@ -351,11 +400,12 @@ const state = {
   recipes: {},
   settings: clone(DEFAULT_SETTINGS),
   plan: emptyPlan(),
-  mode: "loading",       // "db" | "local" | "loading"
+  mode: "loading",       // "db" (signed in) | "signin" | "local" (no Firebase config) | "loading"
   readOnly: false,
   editing: null,         // recipe id | "new" | null
   importing: false,
-  rsearch: "", rcuisine: "", rsort: lsGet("mpp.rsort") || "cuisine"
+  rsearch: "", rcuisine: "", rsort: lsGet("mpp.rsort") || "cuisine",
+  user: null, drafts: [], draftTotal: 0, importMode: "url", importBusy: false, importError: ""
 };
 let db = null, poolCache = new Map();
 
@@ -368,15 +418,22 @@ function lsGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { 
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 
 /* ---------- ingredient parsing ---------- */
+// Unit families. Amounts combine only within a family: volume (base ml), weight (base g),
+// or count (same count word only). [family, factor to base, metric?]
 const UNITS = {
-  g:["g",1], gram:["g",1], grams:["g",1], kg:["g",1000], kilogram:["g",1000], kilograms:["g",1000],
-  oz:["oz",1], ounce:["oz",1], ounces:["oz",1], lb:["oz",16], lbs:["oz",16], pound:["oz",16], pounds:["oz",16],
-  ml:["ml",1], milliliter:["ml",1], milliliters:["ml",1], l:["ml",1000], liter:["ml",1000], liters:["ml",1000], litre:["ml",1000],
-  tsp:["tbsp",1/3], teaspoon:["tbsp",1/3], teaspoons:["tbsp",1/3], tbsp:["tbsp",1], tablespoon:["tbsp",1], tablespoons:["tbsp",1],
-  cup:["cup",1], cups:["cup",1], can:["can",1], cans:["can",1], clove:["clove",1], cloves:["clove",1],
-  slice:["slice",1], slices:["slice",1], bunch:["bunch",1], bunches:["bunch",1], head:["head",1], heads:["head",1],
-  scoop:["scoop",1], scoops:["scoop",1], sheet:["sheet",1], sheets:["sheet",1], piece:["",1], pieces:["",1], pinch:["pinch",1]
+  g:["weight",1,1], gram:["weight",1,1], grams:["weight",1,1], kg:["weight",1000,1], kilogram:["weight",1000,1], kilograms:["weight",1000,1],
+  oz:["weight",28.35,0], ounce:["weight",28.35,0], ounces:["weight",28.35,0], lb:["weight",453.6,0], lbs:["weight",453.6,0], pound:["weight",453.6,0], pounds:["weight",453.6,0],
+  ml:["volume",1,1], milliliter:["volume",1,1], milliliters:["volume",1,1], l:["volume",1000,1], liter:["volume",1000,1], liters:["volume",1000,1], litre:["volume",1000,1],
+  tsp:["volume",4.929,0], teaspoon:["volume",4.929,0], teaspoons:["volume",4.929,0], tbsp:["volume",14.787,0], tablespoon:["volume",14.787,0], tablespoons:["volume",14.787,0],
+  cup:["volume",236.6,0], cups:["volume",236.6,0], "fl oz":["volume",29.57,0], floz:["volume",29.57,0]
 };
+const COUNT_ALIAS = { cloves:"clove", cans:"can", slices:"slice", bunches:"bunch", heads:"head", scoops:"scoop", sheets:"sheet", ears:"ear", pieces:"", piece:"", each:"", packets:"packet", stalks:"stalk", sprigs:"sprig", pinches:"pinch" };
+function unitInfo(unit) {
+  const u = String(unit || "").toLowerCase().trim();
+  if (UNITS[u]) return { family: UNITS[u][0], factor: UNITS[u][1], metric: !!UNITS[u][2] };
+  const c = u in COUNT_ALIAS ? COUNT_ALIAS[u] : u;
+  return { family: "count:" + c, factor: 1, unit: c };
+}
 const FRAC = { "½":.5, "¼":.25, "¾":.75, "⅓":1/3, "⅔":2/3, "⅛":.125 };
 function parseQty(s) {
   s = s.replace(/[½¼¾⅓⅔⅛]/g, m => " " + FRAC[m]).trim();
@@ -395,12 +452,17 @@ function parseIngredientLine(line) {
   if (m) {
     qty = parseQty(m[1]);
     let rest = m[2];
-    const um = rest.match(/^([a-zA-Z]+)\.?\s+(?:of\s+)?(.+)$/);
-    if (um && UNITS[um[1].toLowerCase()]) { unit = um[1].toLowerCase(); rest = um[2]; }
+    const um = rest.match(/^(fl\.?\s*oz|[a-zA-Z]+)\.?\s+(?:of\s+)?(.+)$/);
+    const uw = um && um[1].toLowerCase().replace(/\.|\s/g, "");
+    if (um && (UNITS[uw] || uw in COUNT_ALIAS || ["clove","can","slice","bunch","head","scoop","sheet","ear","packet","stalk","sprig","pinch"].includes(uw))) { unit = uw === "floz" ? "fl oz" : uw; rest = um[2]; }
     item = rest;
   }
-  item = item.replace(/,.*$/, "").trim().toLowerCase();
-  return { item, qty, unit, category: cat || guessCategory(item) };
+  // "garlic, minced" or "garlic (minced)": the prep note is kept separately and never merged on the grocery list.
+  let prep = "";
+  const pm = item.match(/^(.*?)\s*(?:,\s*|\(\s*)(.+?)\)?\s*$/);
+  if (pm && pm[2]) { item = pm[1]; prep = pm[2]; }
+  item = item.trim().toLowerCase();
+  return { item, qty, unit, ...(prep ? { prep: prep.trim() } : {}), category: cat || guessCategory(item) };
 }
 const CAT_RULES = [
   [STAPLE, ["olive oil","sesame oil","vegetable oil","canola oil","coconut oil","oil","salt","black pepper","soy sauce","fish sauce","vinegar","honey","maple syrup","cumin","oregano","garam masala","paprika","chili powder","cinnamon","turmeric","cornstarch","sugar","spice","baking"]],
@@ -453,9 +515,11 @@ function normalizeRecipe(raw, opts = {}) {
     const item = String(pick(i, ["item","name","ingredient","food"]) || "").trim().toLowerCase();
     if (!item) return null;
     const q = pick(i, ["qty","quantity","amount"]);
-    const parsed = typeof q === "string" ? parseIngredientLine(q + " " + (i.unit ? i.unit + " " : "") + item) : null;
-    if (parsed && parsed.qty != null) { if (i.category) parsed.category = i.category; return parsed; }
-    return { item, qty: q == null || q === "" ? null : parseFloat(q), unit: String(i.unit || "").toLowerCase(), category: i.category || guessCategory(item) };
+    const extra = { ...(i.prep ? { prep: String(i.prep).trim() } : {}), ...(i.line ? { line: String(i.line) } : {}) };
+    const parsed = typeof q === "string" && isNaN(+q) ? parseIngredientLine(q + " " + (i.unit ? i.unit + " " : "") + item) : null;
+    if (parsed && parsed.qty != null) { if (i.category) parsed.category = i.category; return { ...parsed, ...extra }; }
+    const qn = q == null || q === "" ? null : parseFloat(q);
+    return { item, qty: isNaN(qn) ? null : qn, unit: String(i.unit || "").toLowerCase().trim(), ...extra, category: i.category || guessCategory(item) };
   }).filter(Boolean);
   let steps = pick(raw, ["steps","instructions","directions","method"]) || [];
   if (typeof steps === "string") steps = steps.split(/\n+/);
@@ -466,6 +530,8 @@ function normalizeRecipe(raw, opts = {}) {
     meals: normMeals(pick(raw, ["meals","meal","mealType","meal_type","type","course"])),
     servings, cal: Math.round(cal), p: +p.toFixed(1), c: +c.toFixed(1), f: +f.toFixed(1),
     ingredients: ings, steps, example: !!raw.example,
+    // Macros are estimates unless the source supplied them; older records say so in their source text.
+    estimated: raw.estimated != null ? !!raw.estimated : raw.macrosEstimated != null ? !!raw.macrosEstimated : /estimat/i.test(String(raw.source || "")),
     ...(raw.source ? { source: String(raw.source) } : {}),
     ...(raw.portable ? { portable: true } : {}),
     ...(raw.mfp ? { mfp: raw.mfp } : {})
@@ -524,10 +590,13 @@ function exampleRecipes() {
 function activeSlots() { return SLOTS.map(s => s[0]).filter(s => state.settings.slots[s]); }
 function cuisines() { return [...new Set(Object.values(state.recipes).map(r => r.cuisine))].sort(); }
 function itemKey(name) { return name.toLowerCase().replace(/\s+/g, " ").trim(); }
+// Distinct ingredient keys a recipe needs. Items marked "I already have this" don't count toward the unique total.
 function recipeItems(r) {
-  if (!r._items) r._items = [...new Map(r.ingredients.map(i => [itemKey(i.item), i.category === STAPLE ? STAPLE_WEIGHT : 1])).entries()];
+  if (!r._items) r._items = [...new Set(r.ingredients.map(i => itemKey(i.item)))];
   return r._items;
 }
+function haveSet() { return new Set(state.settings.have || []); }
+function targetsOn() { const S = state.settings; return !!S.useTargets && ["cal","p","c","f"].some(k => S.targets[k] > 0); }
 function eligibleIds(slot, dayCuisine) {
   const all = Object.values(state.recipes).filter(r => r.meals.includes(slot));
   const g = state.settings.cuisines;
@@ -546,6 +615,8 @@ function portionSteps() {
 // Picks a serving multiplier per meal so the day lands inside every macro tolerance band.
 function solve(recs) {
   const S = state.settings;
+  // With no targets set the plan ignores macros: everyone eats one serving.
+  if (!targetsOn()) return { x: recs.map(() => 1), err: 0, tot: [0, 0, 0, 0], dev: [0, 0, 0, 0], feasible: true };
   const T = [S.targets.cal, S.targets.p, S.targets.c, S.targets.f];
   const TL = [S.tol.cal, S.tol.p, S.tol.c, S.tol.f].map(v => Math.max(v, 1) / 100);
   const W = [1.5, 1.2, 1, 1];
@@ -584,65 +655,6 @@ function solve(recs) {
   return { x: x.slice(), err: best, tot, dev, feasible: dev.every(d => Math.abs(d) <= 1) };
 }
 
-/* ---------- day pools ---------- */
-const COMBO_CAP = 120000;
-function dayPool(d) {
-  const day = state.plan.days[d], act = activeSlots();
-  const lists = act.map(s => {
-    const c = day.slots[s];
-    if (c && c.locked && state.recipes[c.id]) return [c.id];
-    return eligibleIds(s, day.cuisine);
-  });
-  const key = JSON.stringify(lists);
-  if (poolCache.has(key)) return poolCache.get(key);
-  const result = { combos: [], feasible: false, missing: act.filter((s, i) => !lists[i].length) };
-  if (result.missing.length || !act.length) { poolCache.set(key, result); return result; }
-  const feas = [], other = [];
-  const visit = ids => {
-    if (new Set(ids).size < ids.length) return;
-    const s = solve(ids.map(id => state.recipes[id]));
-    const c = { ids, x: s.x, err: s.err };
-    if (s.feasible) feas.push(c);
-    else { other.push(c); if (other.length > 400) { other.sort((a, b) => a.err - b.err); other.length = 80; } }
-  };
-  const total = lists.reduce((a, l) => a * l.length, 1);
-  if (total <= COMBO_CAP) {
-    const rec = (i, acc) => { if (i === lists.length) return visit(acc.slice()); for (const id of lists[i]) { acc.push(id); rec(i + 1, acc); acc.pop(); } };
-    rec(0, []);
-  } else {
-    for (let t = 0; t < COMBO_CAP; t++) visit(lists.map(l => l[Math.floor(Math.random() * l.length)]));
-  }
-  feas.sort((a, b) => a.err - b.err);
-  other.sort((a, b) => a.err - b.err);
-  result.feasible = feas.length > 0;
-  result.combos = feas.length ? feas : other.slice(0, 60);
-  poolCache.set(key, result);
-  return result;
-}
-function currentCombo(d) {
-  const day = state.plan.days[d], act = activeSlots();
-  const ids = act.map(s => day.slots[s] && state.recipes[day.slots[s].id] ? day.slots[s].id : null);
-  if (ids.some(id => !id)) return null;
-  const s = solve(ids.map(id => state.recipes[id]));
-  return { ids, x: act.map(sl => day.slots[sl].x || 1), err: s.err };
-}
-
-/* ---------- week generator ---------- */
-function weekScore(choices) {
-  const items = new Map(), rep = new Map(); let err = 0;
-  for (const c of choices) {
-    if (!c) continue;
-    err += c.err;
-    for (const id of new Set(c.ids)) {
-      rep.set(id, (rep.get(id) || 0) + 1);
-      for (const [k, w] of recipeItems(state.recipes[id])) items.set(k, w);
-    }
-  }
-  let g = 0; for (const w of items.values()) g += w;
-  let pen = 0; const max = state.settings.maxRepeat;
-  for (const v of rep.values()) if (v > max) pen += (v - max) * 40;
-  return g + 0.6 * err + pen;
-}
 /* ---------- linked meals (leftovers + breakfast rotation) ---------- */
 function linkMode() {
   const S = state.settings, act = activeSlots();
@@ -657,6 +669,8 @@ function linkedSlots(d, s) {
   if (s === "breakfast" && L.bf) return BF_GROUPS[bfGroup(d)].map(x => [x, "breakfast"]);
   return [[d, s]];
 }
+// The slot where a linked meal is cooked (the others are leftovers or repeats of it).
+function isCookSlot(d, s) { const l = linkedSlots(d, s); return l[0][0] === d && l[0][1] === s; }
 function isCarDay(d, s) { return s === "breakfast" && linkMode().bf && bfGroup(d) === CAR_GROUP; }
 function carFriendly(ids) { const c = ids.filter(id => state.recipes[id] && state.recipes[id].portable); return c.length ? c : ids; }
 function slotChoices(d, s) {
@@ -664,15 +678,16 @@ function slotChoices(d, s) {
   return isCarDay(d, s) ? carFriendly(ids) : ids;
 }
 // The week as a set of cooking decisions ("vars"); each var fills one or more slots.
+// Snacks aren't cooked, so only they may repeat (up to maxRepeat days).
 function weekVars() {
   const act = activeSlots(), L = linkMode(), vars = [];
   if (act.includes("breakfast")) {
-    if (L.bf) BF_GROUPS.forEach((g, gi) => vars.push({ kind: "bf", cook: g[0], slots: g.map(x => [x, "breakfast"]) }));
+    if (L.bf) BF_GROUPS.forEach(g => vars.push({ kind: "bf", cook: g[0], slots: g.map(x => [x, "breakfast"]) }));
     else DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, "breakfast"]] }));
   }
   if (L.lo) DAYS.forEach((_, d) => vars.push({ kind: "din", cook: d, slots: [[d, "dinner"], [(d + 1) % 7, "lunch"]] }));
   else for (const s of ["lunch", "dinner"]) if (act.includes(s)) DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, s]] }));
-  for (const s of act.filter(s => !["breakfast", "lunch", "dinner"].includes(s))) DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, s]] }));
+  for (const s of act.filter(s => !["breakfast", "lunch", "dinner"].includes(s))) DAYS.forEach((_, d) => vars.push({ kind: "snack", cook: d, slots: [[d, s]] }));
   vars.forEach(v => {
     const [d0, s0] = v.slots[0];
     let c = slotChoices(d0, s0);
@@ -684,16 +699,22 @@ function weekVars() {
   });
   return vars;
 }
-function generateLinked(mode, days) {
-  const act = activeSlots(), vars = weekVars(), inDays = new Set(days);
+
+/* ---------- week generator ---------- */
+// Priority order (PRD): macro targets (when set) > variety rules > fewest unique ingredients.
+// Variety rules: no recipe cooked twice, at least 2 cuisines (relaxed by "Minimize groceries").
+// "Surprise me" keeps the first two tiers and drops the ingredient tier.
+const TIER = { missing: 2e7, macroDay: 1e6, macroSize: 1e5, repeat: 1e4, cuisine: 1e4, same: 5e3 };
+function generate(mode, days) {
+  const act = activeSlots(), vars = weekVars(), inDays = new Set(days), S = state.settings;
   vars.forEach(v => {
     const touches = v.slots.some(([d]) => inDays.has(d));
     const emptyHere = v.slots.some(([d, s]) => inDays.has(d) && !(state.plan.days[d].slots[s] && state.recipes[state.plan.days[d].slots[s].id]));
     v.free = !v.locked && touches && (inDays.has(v.cook) || emptyHere) && v.cands.length > 0;
     v.val = v.locked ? v.locked.id : v.free ? null : v.current;
   });
-  const free = vars.filter(v => v.free);
-  // day -> var index per active slot
+  const free = vars.filter(v => v.free), freeIdx = free.map(v => vars.indexOf(v));
+  const prev = vars.map(v => v.current);
   const slotVar = DAYS.map(() => ({}));
   vars.forEach((v, i) => v.slots.forEach(([d, s]) => { slotVar[d][s] = i; }));
   const memo = new Map();
@@ -704,41 +725,56 @@ function generateLinked(mode, days) {
     if (!memo.has(k)) memo.set(k, solve(ids.map(id => state.recipes[id])));
     return memo.get(k);
   };
-  const lean = mode !== "random";
+  const lean = mode !== "random", withTargets = targetsOn(), have = haveSet();
+  const cuisineRule = !S.minimize && new Set(vars.filter(v => v.kind !== "snack").flatMap(v => v.cands.map(id => state.recipes[id].cuisine))).size >= 2;
   const score = vals => {
-    let err = 0, bad = 0;
-    for (let d = 0; d < 7; d++) { const s = daySolve(vals, d); if (!s) { bad += 2; continue; } err += s.err; if (!s.feasible) bad++; }
-    const uses = new Map(), dayUses = new Map(), items = new Map();
+    let sc = 0;
+    for (let d = 0; d < 7; d++) {
+      const s = daySolve(vals, d);
+      if (!s) { sc += TIER.missing; continue; }
+      if (withTargets) {
+        if (!s.feasible) sc += TIER.macroDay;
+        sc += TIER.macroSize * s.dev.reduce((a, x) => a + Math.max(0, Math.abs(x) - 1), 0) + 0.01 * s.err;
+      }
+    }
+    const cooked = new Map(), snacks = new Map(), cuis = new Set(), items = new Set();
     vals.forEach((id, i) => {
       if (!id) return;
-      const v = vars[i];
-      if (v.kind !== "one") uses.set(id, (uses.get(id) || 0) + 1);
-      else dayUses.set(id, (dayUses.get(id) || 0) + 1);
-      if (lean) for (const [k, w] of recipeItems(state.recipes[id])) items.set(k, w);
+      const r = state.recipes[id];
+      if (vars[i].kind === "snack") snacks.set(id, (snacks.get(id) || 0) + 1);
+      else { cooked.set(id, (cooked.get(id) || 0) + 1); cuis.add(r.cuisine); }
+      if (lean) for (const k of recipeItems(r)) if (!have.has(k)) items.add(k);
     });
-    let pen = 0;
-    for (const n of uses.values()) if (n > 1) pen += (n - 1) * 25;
-    for (const n of dayUses.values()) if (n > state.settings.maxRepeat) pen += (n - state.settings.maxRepeat) * 40;
-    let g = 0; for (const w of items.values()) g += w;
-    return g + 0.6 * err + 30 * bad + pen;
+    for (const n of cooked.values()) if (n > 1) sc += (n - 1) * TIER.repeat;
+    for (const [id, n] of snacks) { if (n > S.maxRepeat) sc += (n - S.maxRepeat) * TIER.repeat; if (cooked.has(id)) sc += TIER.repeat; }
+    if (cuisineRule && cuis.size < 2) sc += TIER.cuisine;
+    // A regenerated plan must differ from the one it replaces.
+    if (free.length && freeIdx.every(i => vals[i] === prev[i])) sc += TIER.same;
+    return sc + items.size;
   };
-  const rnd = v => v.cands[Math.floor(Math.random() * v.cands.length)];
+  // Proposals avoid recipes another cooked meal already uses, so "no repeats" holds whenever the library allows it.
+  const propose = (vals, i) => {
+    const v = vars[i];
+    const used = v.kind === "snack" ? null : new Set(vals.filter((id, j) => id && j !== i && vars[j].kind !== "snack"));
+    for (let t = 0; t < 10; t++) { const id = v.cands[Math.floor(Math.random() * v.cands.length)]; if (!used || !used.has(id)) return id; }
+    return v.cands[Math.floor(Math.random() * v.cands.length)];
+  };
   let best = vars.map(v => v.val), bestS = Infinity;
   if (free.length) {
     const restarts = lean ? 4 : 6, iters = lean ? 4000 : 2500;
-    const allOn = vals => DAYS.every((_, d) => { const s = daySolve(vals, d); return s && s.feasible; });
     for (let r = 0; r < restarts; r++) {
-      const cur = vars.map(v => v.free ? rnd(v) : v.val);
+      const cur = vars.map(v => v.free ? null : v.val);
+      for (const i of freeIdx) cur[i] = propose(cur, i);
       let s = score(cur), T = lean ? 4 : 2;
       for (let it = 0; it < iters; it++) {
-        const v = free[Math.floor(Math.random() * free.length)], i = vars.indexOf(v);
-        const old = cur[i]; cur[i] = rnd(v);
+        const i = freeIdx[Math.floor(Math.random() * freeIdx.length)];
+        const old = cur[i]; cur[i] = propose(cur, i);
         const ns = score(cur);
         if (ns <= s || Math.random() < Math.exp((s - ns) / T)) s = ns; else cur[i] = old;
         T *= 0.999;
       }
       if (s < bestS) { bestS = s; best = cur.slice(); }
-      if (!lean && allOn(best)) break;
+      if (!lean && bestS < TIER.same) break;
     }
   }
   // Write the chosen recipes, then portions for every day they touch.
@@ -747,68 +783,41 @@ function generateLinked(mode, days) {
   vars.forEach((v, i) => {
     if (!v.free) return;
     v.slots.forEach(([d, s]) => {
-      const prev = state.plan.days[d].slots[s];
-      state.plan.days[d].slots[s] = { id: best[i], x: 1, locked: !!(prev && prev.locked && prev.id === best[i]) };
+      const p = state.plan.days[d].slots[s];
+      state.plan.days[d].slots[s] = { id: best[i], x: 1, locked: !!(p && p.locked && p.id === best[i]) };
     });
   });
   touched.forEach(d => rebalance(d));
+  if (days.length === 7) { S.planLog = [...(S.planLog || []), new Date().toISOString()].slice(-60); saveSettings(); }
   const skipped = days.filter(d => act.some(s => !best[slotVar[d][s]]));
   const offTarget = days.filter(d => !skipped.includes(d) && !dayStatus(d).feasible);
-  return { skipped, offTarget };
+  const shortBy = needMore(vars, best);
+  return { skipped, offTarget, shortBy, repeats: cookedRepeats(vars, best), cuisineMiss: cuisineRule && new Set(best.filter((id, i) => id && vars[i].kind !== "snack").map(id => state.recipes[id].cuisine)).size < 2 };
 }
-function generate(mode, days) {
-  const L = linkMode();
-  return L.lo || L.bf ? generateLinked(mode, days) : generateDaily(mode, days);
+function cookedRepeats(vars, vals) {
+  const seen = new Set(), rep = new Set();
+  vals.forEach((id, i) => { if (!id || vars[i].kind === "snack") return; if (seen.has(id)) rep.add(id); seen.add(id); });
+  return [...rep];
 }
-function generateDaily(mode, days) {
-  const pools = {}, skipped = [], offTarget = [];
-  for (const d of days) {
-    pools[d] = dayPool(d);
-    if (!pools[d].combos.length) skipped.push(d);
-    else if (!pools[d].feasible) offTarget.push(d);
+// For each meal type, how many more distinct recipes the library needs so no cooked meal repeats.
+function needMore(vars, vals) {
+  const need = {};
+  for (const s of ["breakfast", "dinner", "lunch"]) {
+    const vs = vars.filter(v => v.kind !== "snack" && v.slots[0][1] === s);
+    if (!vs.length) continue;
+    const pool = new Set(vs.flatMap(v => v.cands));
+    if (pool.size < vs.length) need[s] = vs.length - pool.size;
   }
-  const free = days.filter(d => pools[d].combos.length);
-  let choices = state.plan.days.map((_, d) => days.includes(d) ? null : currentCombo(d));
-  const top = p => p.combos[Math.floor(Math.random() * Math.min(p.combos.length, 400))];
-  if (mode === "random") {
-    const counts = new Map();
-    choices.forEach(c => c && new Set(c.ids).forEach(id => counts.set(id, (counts.get(id) || 0) + 1)));
-    for (const d of free.sort(() => Math.random() - .5)) {
-      const p = pools[d].combos; let pickC = null;
-      for (let t = 0; t < 60 && !pickC; t++) {
-        const c = p[Math.floor(Math.random() * p.length)];
-        if ([...new Set(c.ids)].every(id => (counts.get(id) || 0) < state.settings.maxRepeat)) pickC = c;
-      }
-      pickC = pickC || p[0];
-      new Set(pickC.ids).forEach(id => counts.set(id, (counts.get(id) || 0) + 1));
-      choices[d] = pickC;
-    }
-  } else if (free.length) {
-    let best = null, bestS = Infinity;
-    for (let r = 0; r < 4; r++) {
-      const cur = choices.slice();
-      for (const d of free) cur[d] = top(pools[d]);
-      let s = weekScore(cur), T = 3;
-      for (let it = 0; it < 2500; it++) {
-        const d = free[Math.floor(Math.random() * free.length)];
-        const old = cur[d]; cur[d] = top(pools[d]);
-        const ns = weekScore(cur);
-        if (ns <= s || Math.random() < Math.exp((s - ns) / T)) s = ns; else cur[d] = old;
-        T *= 0.998;
-      }
-      if (s < bestS) { bestS = s; best = cur.slice(); }
-    }
-    choices = best;
-  }
-  const act = activeSlots();
-  for (const d of free) {
-    const c = choices[d], day = state.plan.days[d];
-    act.forEach((s, i) => {
-      const prev = day.slots[s];
-      day.slots[s] = { id: c.ids[i], x: c.x[i], locked: !!(prev && prev.locked && prev.id === c.ids[i]) };
-    });
-  }
-  return { skipped, offTarget };
+  return need;
+}
+// What a day missed, for the "which target it missed and by how much" message.
+function dayMiss(d) {
+  const st = dayStatus(d), S = state.settings;
+  const names = { cal: "calories", p: "protein", c: "carbs", f: "fat" };
+  const worst = ["cal","p","c","f"].filter(k => Math.abs(st.dev[k]) * 100 > S.tol[k] + 1e-9).sort((a, b) => Math.abs(st.dev[b]) - Math.abs(st.dev[a]))[0];
+  if (!worst) return null;
+  const diff = Math.round(st.tot[worst] - S.targets[worst]);
+  return { k: worst, name: names[worst], text: `${names[worst]} ${diff > 0 ? "over" : "under"} by ${Math.abs(diff)}${worst === "cal" ? " kcal" : " g"} (${Math.abs(Math.round(st.dev[worst] * 100))}%)` };
 }
 function rebalance(d) {
   const day = state.plan.days[d], act = activeSlots();
@@ -827,32 +836,37 @@ function dayStatus(d) {
     for (const k of ["cal","p","c","f"]) tot[k] += r[k] * (c.x || 1);
   }
   const dev = {}; let feasible = true;
+  const on = targetsOn();
   for (const k of ["cal","p","c","f"]) {
-    const t = S.targets[k]; dev[k] = t > 0 ? (tot[k] - t) / t : 0;
+    const t = S.targets[k]; dev[k] = on && t > 0 ? (tot[k] - t) / t : 0;
     if (Math.abs(dev[k]) * 100 > S.tol[k] + 1e-9) feasible = false;
   }
   return { tot, dev, filled, need: act.length, complete: filled === act.length && act.length > 0, feasible };
 }
+function household() { return Math.max(1, Math.round(+state.settings.household || 1)); }
 
 /* ---------- groceries ---------- */
+// One line per ingredient name (prep notes dropped), scaled to household size.
+// Amounts add up within a unit family; different families show side by side ("2 cloves + 1 tbsp").
 function groceries() {
-  const items = new Map(), cook = new Map();
+  const items = new Map(), cook = new Map(), H = household(), have = haveSet();
   state.plan.days.forEach((day, d) => {
     for (const s of activeSlots()) {
       const c = day.slots[s], r = c && state.recipes[c.id];
       if (!r) continue;
       const x = c.x || 1;
-      const ck = cook.get(r.id) || { r, portions: 0, days: new Set() };
-      ck.portions += x; ck.days.add(DAYS[d].slice(0, 3)); cook.set(r.id, ck);
-      const f = x / (r.servings || 1);
+      const ck = cook.get(r.id) || { r, portions: 0, days: new Set(), meals: [] };
+      ck.portions += x * H; ck.days.add(DAYS[d].slice(0, 3)); ck.meals.push([d, s]); cook.set(r.id, ck);
+      const f = x * H / (r.servings || 1);
       for (const ing of r.ingredients) {
         const k = itemKey(ing.item);
-        const g = items.get(k) || { key: k, name: ing.item, category: ing.category || "Other", amounts: {}, used: new Set(), untracked: false };
+        const g = items.get(k) || { key: k, name: ing.item, category: ing.category || "Other", amounts: {}, metric: {}, used: new Set(), untracked: false, have: have.has(k) };
         g.used.add(r.name);
         if (ing.qty == null || isNaN(ing.qty)) g.untracked = true;
         else {
-          const u = UNITS[ing.unit] || [ing.unit || "", 1];
-          g.amounts[u[0]] = (g.amounts[u[0]] || 0) + ing.qty * u[1] * f;
+          const u = unitInfo(ing.unit);
+          g.amounts[u.family] = (g.amounts[u.family] || 0) + ing.qty * u.factor * f;
+          if (u.metric != null) g.metric[u.family] = (g.metric[u.family] ?? true) && u.metric;
         }
         items.set(k, g);
       }
@@ -860,6 +874,8 @@ function groceries() {
   });
   return { items: [...items.values()], cook: [...cook.values()] };
 }
+// Unique ingredients the plan needs, not counting ones marked "I already have this".
+function uniqueCount() { return groceries().items.filter(g => !g.have).length; }
 function fmtNum(v) {
   if (v >= 10) return String(Math.round(v));
   const q = round(v, 0.25);
@@ -868,18 +884,37 @@ function fmtNum(v) {
   if (!whole && !f) return "¼";
   return (whole || "") + f;
 }
-function fmtAmount(unit, v) {
-  if (unit === "g") return v >= 1000 ? (+(v / 1000).toFixed(2)) + " kg" : (v >= 20 ? round(v, 5) : Math.round(v)) + " g";
-  if (unit === "ml") return v >= 1000 ? (+(v / 1000).toFixed(2)) + " L" : (v >= 20 ? round(v, 5) : Math.round(v)) + " ml";
-  if (unit === "oz") return v >= 16 ? (+(v / 16).toFixed(2)) + " lb" : fmtNum(v) + " oz";
-  if (unit === "tbsp") return v < 1 ? fmtNum(v * 3) + " tsp" : fmtNum(v) + " tbsp";
+// Format a combined amount. family is "weight" (grams), "volume" (ml) or "count:<word>"; metric picks g/ml vs oz/cups.
+function fmtAmount(family, v, metric) {
+  if (family === "weight") {
+    if (metric) return v >= 1000 ? (+(v / 1000).toFixed(2)) + " kg" : (v >= 20 ? round(v, 5) : Math.round(v)) + " g";
+    const oz = v / 28.35;
+    return oz >= 16 ? (+(oz / 16).toFixed(2)) + " lb" : fmtNum(oz) + " oz";
+  }
+  if (family === "volume") {
+    if (metric) return v >= 1000 ? (+(v / 1000).toFixed(2)) + " L" : (v >= 20 ? round(v, 5) : Math.round(v)) + " ml";
+    const tsp = v / 4.929;
+    if (tsp < 3) return fmtNum(tsp) + " tsp";
+    if (tsp < 12) return fmtNum(tsp / 3) + " tbsp";
+    return fmtNum(v / 236.6) + (v / 236.6 > 1 ? " cups" : " cup");
+  }
+  const unit = String(family).replace(/^count:/, "");
   if (!unit) return fmtNum(Math.ceil(v * 4) / 4);
   return fmtNum(v) + " " + unit + (v > 1 && !/s$/.test(unit) && unit !== "pinch" ? "s" : "");
 }
 function amountText(g) {
-  const parts = Object.entries(g.amounts).map(([u, v]) => fmtAmount(u, v));
+  const order = f => f === "weight" ? 1 : f === "volume" ? 2 : 0;
+  const parts = Object.entries(g.amounts).sort((a, b) => order(a[0]) - order(b[0])).map(([f, v]) => fmtAmount(f, v, g.metric ? g.metric[f] : true));
   if (g.untracked && !parts.length) return "to taste";
   return parts.join(" + ");
+}
+// One ingredient's amount for a recipe, in its own unit (recipe sheet and editor).
+function ingAmount(ing, mult) {
+  if (ing.qty == null || isNaN(ing.qty)) return "";
+  const v = ing.qty * mult, u = String(ing.unit || "").trim();
+  if (!u) return fmtNum(Math.ceil(v * 4) / 4);
+  if (["g", "ml"].includes(u)) return (v >= 20 ? round(v, 5) : Math.round(v)) + " " + u;
+  return fmtNum(v) + " " + u;
 }
 
 /* ---------- persistence ---------- */
@@ -928,85 +963,86 @@ async function deleteRecipes(ids) {
   try { for (const id of ids) await db.collection("recipes").doc(id).delete(); } catch (e) { writeFailed(e); }
 }
 function writeFailed(e) {
-  if (e && e.code === "invalid_argument") { state.readOnly = true; toast("You can view this planner but not change it."); render(); }
-  else if (e && e.code === "quota_exceeded") toast("Storage is full. Delete some recipes and try again.");
+  console.error(e);
+  if (e && e.code === "permission-denied") toast("You're signed out or don't have access. Sign in again.");
+  else if (e && e.code === "resource-exhausted") toast("Storage is full. Delete some recipes and try again.");
   else toast("Couldn't save just now. Your last change may not be kept.");
 }
 function mergeSettings(s) {
   const d = clone(DEFAULT_SETTINGS);
-  return { ...d, ...s, targets: { ...d.targets, ...(s && s.targets) }, tol: { ...d.tol, ...(s && s.tol) }, slots: { ...d.slots, ...(s && s.slots) }, cuisines: (s && s.cuisines) || [] };
+  return { ...d, ...s, targets: { ...d.targets, ...(s && s.targets) }, tol: { ...d.tol, ...(s && s.tol) }, slots: { ...d.slots, ...(s && s.slots) },
+    cuisines: (s && s.cuisines) || [], have: (s && s.have) || [], planLog: (s && s.planLog) || [] };
 }
 function mergePlan(p) {
   const e = emptyPlan();
   if (!p || !Array.isArray(p.days)) return e;
-  return { days: e.days.map((d, i) => ({ cuisine: (p.days[i] && p.days[i].cuisine) || "", slots: (p.days[i] && p.days[i].slots) || {} })), checked: p.checked || {} };
-}
-function firstRun() {
-  const ex = exampleRecipes();
-  ex.forEach(r => state.recipes[r.id] = r);
-  state.settings.seeded = true;
-  generate("lean", DAYS.map((_, i) => i));
-  return ex;
+  return { days: e.days.map((d, i) => ({ cuisine: (p.days[i] && p.days[i].cuisine) || "", slots: (p.days[i] && p.days[i].slots) || {} })), checked: p.checked || {}, cooked: p.cooked || {} };
 }
 
-async function boot() {
-  const claude = window.claude;
-  if (claude && claude.use) {
-    try { db = await claude.use("db"); } catch { db = null; }
-  }
-  if (db) {
-    state.mode = "db";
+/* ---------- accounts and storage ---------- */
+// Signed in (Firebase): everything lives under users/{uid}/ — recipes/{id}, app/settings, app/plan — readable only by that user.
+// Without a Firebase config (local development) the app runs on browser storage.
+let auth = null, unsubs = [];
+function boot() {
+  if (!FIREBASE_CONFIG || !window.firebase) { state.mode = "local"; loadLocal(); render(); return; }
+  firebase.initializeApp(FIREBASE_CONFIG);
+  auth = firebase.auth();
+  const fs = firebase.firestore();
+  fs.enablePersistence({ synchronizeTabs: true }).catch(() => {}); // keeps the list usable in a store with bad signal
+  auth.onAuthStateChanged(async user => {
+    unsubs.forEach(u => u()); unsubs = [];
+    if (!user) { state.user = null; db = null; state.mode = "signin"; state.recipes = {}; state.plan = emptyPlan(); state.settings = clone(DEFAULT_SETTINGS); render(); return; }
+    state.user = { uid: user.uid, name: user.displayName || "", email: user.email || "" };
+    const root = `users/${user.uid}`;
+    db = { collection: n => fs.collection(`${root}/${n}`), doc: p => fs.doc(`${root}/${p}`) };
+    state.mode = "loading"; render();
     try {
       const [sSnap, rSnap, pSnap] = await Promise.all([db.doc("app/settings").get(), db.collection("recipes").get(), db.doc("app/plan").get()]);
       state.settings = mergeSettings(sSnap.exists ? sSnap.data() : null);
+      state.recipes = {};
       rSnap.docs.forEach(doc => { state.recipes[doc.id] = { ...doc.data(), id: doc.id }; });
       state.plan = mergePlan(pSnap.exists ? pSnap.data() : null);
-      if (!sSnap.exists && !rSnap.size) {
-        const ex = firstRun();
-        render();
-        try {
-          await db.doc("app/settings").set(clone(state.settings));
-          for (let i = 0; i < ex.length; i += 8) await Promise.all(ex.slice(i, i + 8).map(r => db.collection("recipes").doc(r.id).set(stripRecipe(r))));
-          await db.doc("app/plan").set(clone(state.plan));
-        } catch (e) { writeFailed(e); }
-      }
+      state.mode = "db";
       subscribe();
-    } catch (e) {
-      state.mode = "local"; loadLocal();
-    }
-  } else {
-    state.mode = "local"; loadLocal();
-  }
-  render();
+    } catch (e) { writeFailed(e); state.mode = "signin"; }
+    render();
+  });
 }
+function signIn() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  auth.signInWithPopup(provider).catch(e => {
+    if (e && /popup/.test(e.code || "")) return auth.signInWithRedirect(provider);
+    toast("Sign-in didn't finish. Try again.");
+  });
+}
+function signOut() { if (auth) auth.signOut(); }
 function loadLocal() {
   const r = lsGet("mpp.recipes"), s = lsGet("mpp.settings"), p = lsGet("mpp.plan");
   state.settings = mergeSettings(s);
   state.recipes = {};
   (r || []).forEach(x => state.recipes[x.id] = x);
   state.plan = mergePlan(p);
-  if (!state.settings.seeded && !Object.keys(state.recipes).length) { firstRun(); persistLocal(); }
 }
 function subscribe() {
-  db.collection("recipes").onSnapshot(snap => {
+  unsubs.push(db.collection("recipes").onSnapshot(snap => {
     const next = {};
     snap.docs.forEach(doc => { const old = state.recipes[doc.id]; next[doc.id] = old && JSON.stringify(stripRecipe(old)) === JSON.stringify({ ...doc.data(), id: doc.id }) ? old : { ...doc.data(), id: doc.id }; });
     if (JSON.stringify(Object.keys(next).sort()) !== JSON.stringify(Object.keys(state.recipes).sort()) || Object.keys(next).some(k => next[k] !== state.recipes[k])) {
       state.recipes = next; poolCache.clear(); renderSoft();
     }
-  }, () => {});
-  db.doc("app/plan").onSnapshot(snap => {
+  }, () => {}));
+  unsubs.push(db.doc("app/plan").onSnapshot(snap => {
     if (planTimer || !snap.exists) return;
     const j = JSON.stringify(snap.data());
     if (j === lastPlanJSON || j === JSON.stringify(state.plan)) return;
     state.plan = mergePlan(snap.data()); renderSoft();
-  }, () => {});
-  db.doc("app/settings").onSnapshot(snap => {
+  }, () => {}));
+  unsubs.push(db.doc("app/settings").onSnapshot(snap => {
     if (settingsTimer || !snap.exists) return;
     const j = JSON.stringify(snap.data());
     if (j === lastSettingsJSON || j === JSON.stringify(state.settings)) return;
     state.settings = mergeSettings(snap.data()); poolCache.clear(); renderSoft();
-  }, () => {});
+  }, () => {}));
 }
 // Avoid re-rendering under someone typing in a form.
 function renderSoft() {
@@ -1025,80 +1061,117 @@ function toast(msg) {
 function macroDot(v) { return `<i style="background:var(${v})"></i>`; }
 
 function renderChrome() {
-  const S = state.settings.targets;
-  const fromMacros = Math.round(S.p * 4 + S.c * 4 + S.f * 9);
-  document.getElementById("facts").innerHTML = `
+  const S = state.settings, T = S.targets, signedOut = state.mode === "signin" || state.mode === "loading";
+  const facts = document.getElementById("facts");
+  facts.hidden = signedOut;
+  facts.innerHTML = targetsOn() ? `
     <div class="ft"><span>Daily target</span><button data-action="goto" data-tab="targets">Edit</button></div>
-    <div class="f"><span class="v">${S.cal.toLocaleString()}</span><span class="k">kcal</span></div>
-    <div class="f"><span class="v">${S.p}g</span><span class="k">${macroDot("--protein")}Protein</span></div>
-    <div class="f"><span class="v">${S.c}g</span><span class="k">${macroDot("--carb")}Carbs</span></div>
-    <div class="f"><span class="v">${S.f}g</span><span class="k">${macroDot("--fat")}Fat</span></div>`;
+    <div class="f"><span class="v">${T.cal.toLocaleString()}</span><span class="k">kcal</span></div>
+    <div class="f"><span class="v">${T.p}g</span><span class="k">${macroDot("--protein")}Protein</span></div>
+    <div class="f"><span class="v">${T.c}g</span><span class="k">${macroDot("--carb")}Carbs</span></div>
+    <div class="f"><span class="v">${T.f}g</span><span class="k">${macroDot("--fat")}Fat</span></div>`
+    : `<div class="ft" style="border-bottom-width:2px"><span>No macro targets</span><button data-action="goto" data-tab="targets">Set targets</button></div><div class="f" style="grid-column:1/-1"><span class="k">Cooking for ${household()} · targets are optional</span></div>`;
+  document.getElementById("account").innerHTML = state.user
+    ? `<span>${esc(state.user.email || state.user.name)}</span><button class="btn ghost small" data-action="sign-out">Sign out</button>` : "";
+  document.getElementById("tabs").hidden = signedOut || needsOnboarding();
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab)));
-  const g = groceries().items;
-  document.getElementById("gcount").textContent = g.length ? g.filter(i => i.category !== STAPLE).length : "";
+  const n = signedOut ? 0 : uniqueCount();
+  document.getElementById("gcount").textContent = n || "";
   document.getElementById("rcount").textContent = Object.keys(state.recipes).length || "";
 }
+function needsOnboarding() { return state.mode === "db" && !state.settings.onboarded; }
 
 function render() {
-  if (state.mode === "loading") return;
   renderChrome();
   const v = document.getElementById("view");
-  const html = { plan: viewPlan, groceries: viewGroceries, recipes: viewRecipes, targets: viewTargets }[state.tab]();
-  v.innerHTML = (state.readOnly ? `<div class="notice" style="margin-bottom:12px">You have view access. Ask the owner for edit access to change the plan.</div>` : "") + html;
+  if (state.mode === "loading") { v.innerHTML = `<div class="empty">Loading your recipes…</div>`; return; }
+  if (state.mode === "signin") { v.innerHTML = viewSignIn(); return; }
+  if (needsOnboarding()) { v.innerHTML = viewOnboarding(); return; }
+  v.innerHTML = { plan: viewPlan, groceries: viewGroceries, recipes: viewRecipes, targets: viewTargets }[state.tab]();
   if (viewing) renderSheet();
+}
+
+const PRIVACY = `<div class="privacy panel"><h2>Privacy</h2>
+  <p>You sign in with Google so your recipes stay yours. Your recipes, plans, grocery list and settings are stored in your own space in Google Firebase, and only your account can read them. Nothing is shared or published.</p>
+  <p>When you import a recipe, the link, file or text you give is sent to Anthropic's Claude to read it, and isn't kept after the import. Macros you don't supply are estimates.</p>
+  <p>To delete your data, delete your recipes in the app, or ask Nora (ntan.nora@gmail.com) to remove your account.</p></div>`;
+function viewSignIn() {
+  return `<section class="hero panel">
+    <h2>Variety without the overwhelm</h2>
+    <p>Bring your own recipes. The planner picks a varied week that shares ingredients, so you shop once from a short list. Your recipe library is private to you.</p>
+    <div class="row"><button class="btn primary" data-action="sign-in">Sign in with Google</button></div>
+  </section>${PRIVACY.replace('class="privacy panel"', 'class="privacy panel hero"')}`;
+}
+function viewOnboarding() {
+  const S = state.settings, T = S.targets;
+  return `<section class="hero panel form">
+    <h2>Welcome${state.user && state.user.name ? ", " + esc(state.user.name.split(" ")[0]) : ""}</h2>
+    <p>Two quick questions, then you'll add at least ${MIN_RECIPES} of your own recipes so the planner has enough to make a varied week.</p>
+    <div class="field" style="max-width:220px"><label for="ob-household">How many people are you cooking for?</label><input id="ob-household" type="number" min="1" max="12" step="1" value="${household()}"></div>
+    <label class="toggle"><input type="checkbox" id="ob-targets" ${S.useTargets ? "checked" : ""}> I want daily calorie and macro targets (optional)</label>
+    <div class="fgrid" id="ob-tfields" ${S.useTargets ? "" : "hidden"}>
+      ${MACROS.map(([k, l, u]) => `<div class="field"><label for="ob-${k}">${l} (${u})</label><input id="ob-${k}" type="number" min="0" value="${T[k]}"></div>`).join("")}
+    </div>
+    <div class="row"><button class="btn primary" data-action="finish-onboarding">Continue to add recipes</button></div>
+  </section>`;
 }
 
 function weekSummary() {
   let on = 0, complete = 0;
   state.plan.days.forEach((_, d) => { const s = dayStatus(d); if (s.complete) { complete++; if (s.feasible) on++; } });
   const g = groceries().items;
-  return { on, complete, items: g.filter(i => i.category !== STAPLE).length, staples: g.filter(i => i.category === STAPLE).length };
+  return { on, complete, unique: g.filter(i => !i.have).length, have: g.filter(i => i.have).length };
 }
 
 function viewPlan() {
-  if (!Object.keys(state.recipes).length) {
-    return `<div class="panel empty"><h2>No recipes yet</h2><p>Add or import recipes to start planning.</p>
-      <div class="row"><button class="btn primary" data-action="goto" data-tab="recipes">Add recipes</button><button class="btn" data-action="load-examples">Load example recipes</button></div></div>`;
+  const n = Object.keys(state.recipes).length;
+  if (n < MIN_RECIPES) {
+    return `<section class="panel gate"><h2>Add ${MIN_RECIPES - n} more recipe${MIN_RECIPES - n === 1 ? "" : "s"} to get your first plan</h2>
+      <p class="hint">The planner needs at least ${MIN_RECIPES} of your recipes to build a varied week without repeating a meal. You have ${n}.</p>
+      <div class="progress" role="img" aria-label="${n} of ${MIN_RECIPES} recipes"><span style="width:${Math.min(100, n / MIN_RECIPES * 100)}%"></span></div>
+      <div class="row"><button class="btn primary" data-action="goto-import">Import recipes</button><button class="btn" data-action="goto-new">Add one by hand</button></div></section>`;
   }
-  const S = state.settings, cs = cuisines(), ws = weekSummary();
+  const S = state.settings, cs = cuisines(), ws = weekSummary(), on = targetsOn();
   const chips = [`<button class="chip" data-action="cuisine-all" aria-pressed="${!S.cuisines.length}">All cuisines</button>`]
     .concat(cs.map(c => `<button class="chip" data-action="cuisine" data-c="${esc(c)}" aria-pressed="${S.cuisines.includes(c)}">${esc(c)}</button>`)).join("");
   const days = state.plan.days.map((_, d) => dayCard(d)).join("");
+  const misses = on ? state.plan.days.map((_, d) => dayStatus(d).complete && !dayStatus(d).feasible ? `${DAYS[d]}: ${dayMiss(d).text}` : "").filter(Boolean) : [];
+  const L = linkMode();
   return `
   <section class="toolbar">
     <div class="statusline">
-      <span class="pill ${ws.on === 7 ? "ok" : ws.complete ? "warn" : ""}">${ws.on} of 7 days on target</span>
-      <span class="muted"><b class="num" style="color:var(--ink)">${ws.items}</b> grocery items + ${ws.staples} pantry staples</span>
+      ${on ? `<span class="pill ${ws.on === 7 ? "ok" : ws.complete ? "warn" : ""}">${ws.on} of 7 days on target</span>` : ""}
+      <span><b class="num">${ws.unique}</b> <span class="muted">unique ingredients${ws.have ? `, not counting ${ws.have} you already have` : ""}</span></span>
     </div>
+    ${misses.length ? `<div class="notice">No plan from your recipes hits every target. ${misses.map(esc).join(" · ")}. Try wider tolerances under Targets, or add recipes that fill the gap.</div>` : ""}
     <div class="row">
       <span class="label">Cuisines</span>
       <div class="chips">${chips}</div>
     </div>
     <div class="row">
-      <button class="btn primary" data-action="gen-lean" title="Fills unpinned meals, reusing ingredients across the week">Plan a lean grocery week</button>
-      <button class="btn" data-action="gen-random" title="Random meals that still hit your targets">Surprise me</button>
+      <button class="btn primary" data-action="gen-lean" title="A new varied week that shares ingredients">${ws.complete ? "Regenerate the week" : "Plan my week"}</button>
+      <label class="toggle" title="Fewest unique ingredients; the 2-cuisine rule can be relaxed"><input type="checkbox" data-flag="minimize" ${S.minimize ? "checked" : ""}> Minimize groceries</label>
+      <button class="btn ghost" data-action="gen-random" title="Random meals that still follow your rules">Surprise me</button>
       <button class="btn ghost" data-action="fill-empty">Fill empty slots</button>
       <span class="spacer"></span>
       <button class="btn ghost small" data-action="clear-unlocked">Clear unpinned</button>
       <button class="btn ghost small" data-action="clear-all">Clear all</button>
     </div>
-    <p class="hint">Pick any meal yourself and it gets pinned. The planner keeps pinned meals, fills the rest, and scales portions so each day stays within your tolerance.${linkMode().lo ? " Each dinner comes back as the next day's lunch." : ""}${linkMode().bf ? " Breakfast repeats Mon–Tue, Wed–Thu and Fri–Sun, with car-friendly picks for Fri–Sun." : ""}</p>
+    <p class="hint">No recipe is cooked twice, and the week mixes at least 2 cuisines${S.minimize ? " (relaxed while Minimize groceries is on)" : ""}.${on ? " Macro targets come first, then variety, then the shortest list." : " Among varied weeks, the planner picks the one with the fewest unique ingredients."}${L.lo ? " Each dinner comes back as the next day's lunch." : ""}${L.bf ? " Breakfast repeats Mon–Tue, Wed–Thu and Fri–Sun, with car-friendly picks for Fri–Sun." : ""} Pick a meal yourself and it gets pinned.</p>
   </section>
   <div class="week">${days}</div>`;
 }
 
 function dayCard(d) {
-  const day = state.plan.days[d], st = dayStatus(d), S = state.settings, act = activeSlots();
+  const day = state.plan.days[d], st = dayStatus(d), S = state.settings, act = activeSlots(), on = targetsOn();
   const cs = cuisines();
   let pill;
-  if (st.complete && st.feasible) pill = `<span class="pill ok">On target</span>`;
-  else if (st.complete) {
-    const worst = ["cal","p","c","f"].map(k => [k, st.dev[k]]).filter(([k, v]) => Math.abs(v) * 100 > S.tol[k]).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
-    const name = { cal: "calories", p: "protein", c: "carbs", f: "fat" }[worst[0]];
-    pill = `<span class="pill warn">${worst[1] > 0 ? "High" : "Low"} on ${name}</span>`;
-  } else pill = `<span class="pill">${st.filled} of ${st.need} picked</span>`;
+  if (st.complete && !on) pill = `<span class="pill ok">Planned</span>`;
+  else if (st.complete && st.feasible) pill = `<span class="pill ok">On target</span>`;
+  else if (st.complete) pill = `<span class="pill warn">${esc(dayMiss(d).text.replace(/^\w/, ch => ch.toUpperCase()))}</span>`;
+  else pill = `<span class="pill">${st.filled} of ${st.need} picked</span>`;
   const slots = act.map(s => slotCell(d, s)).join("");
-  const meters = MACROS.map(([k, label, unit, color]) => {
+  const meters = !on ? "" : MACROS.map(([k, label, unit, color]) => {
     const t = S.targets[k], v = st.tot[k], tol = S.tol[k] / 100, scale = 1.3;
     const pct = x => Math.max(0, Math.min(100, x / scale * 100));
     const off = st.complete && Math.abs(st.dev[k]) > tol + 1e-9;
@@ -1110,7 +1183,7 @@ function dayCard(d) {
         <span class="tick" style="left:calc(${pct(1)}% - 1px)"></span>
       </div></div>`;
   }).join("");
-  const action = st.complete && !st.feasible ? `<button class="btn small" data-action="fix-day" data-d="${d}">Rebalance day</button>`
+  const action = on && st.complete && !st.feasible ? `<button class="btn small" data-action="fix-day" data-d="${d}">Rebalance day</button>`
     : !st.complete ? `<button class="btn small" data-action="fill-day" data-d="${d}">Fill the rest</button>` : `<button class="btn ghost small" data-action="reroll-day" data-d="${d}">Reroll</button>`;
   return `<article class="day">
     <div class="day-head">
@@ -1119,17 +1192,17 @@ function dayCard(d) {
         <option value="">Any cuisine</option>
         ${cs.map(c => `<option value="${esc(c)}" ${day.cuisine === c ? "selected" : ""}>${esc(c)} day</option>`).join("")}
       </select>
-      ${pill}<span class="spacer"></span>${st.filled ? `<button class="btn ghost small" data-action="copy-mfp-day" data-d="${d}" title="Copy each meal's calories and macros for MyFitnessPal Quick Add">Copy for MFP</button>` : ""}${state.readOnly ? "" : action}
+      ${pill}<span class="spacer"></span>${st.filled ? `<button class="btn ghost small" data-action="copy-mfp-day" data-d="${d}" title="Copy each meal's calories and macros for MyFitnessPal Quick Add">Copy for MFP</button>` : ""}${action}
     </div>
     <div class="slots">${slots}</div>
-    <div class="meters">${meters}</div>
+    ${meters ? `<div class="meters">${meters}</div>` : ""}
   </article>`;
 }
 
 function slotCell(d, s) {
   const day = state.plan.days[d], c = day.slots[s], r = c && state.recipes[c.id];
   const label = SLOTS.find(x => x[0] === s)[1];
-  const L = linkMode();
+  const L = linkMode(), on = targetsOn();
   const ids = s === "lunch" && L.lo ? eligibleIds("dinner", state.plan.days[(d + 6) % 7].cuisine) : slotChoices(d, s);
   let link = "";
   if (s === "lunch" && L.lo) link = `Leftovers from ${DAYS[(d + 6) % 7]}'s dinner`;
@@ -1143,46 +1216,58 @@ function slotCell(d, s) {
   ids.forEach(id => { const x = state.recipes[id]; (byC[x.cuisine] = byC[x.cuisine] || []).push(x); });
   const opts = Object.keys(byC).sort().map(cu => `<optgroup label="${esc(cu)}">${byC[cu].sort((a, b) => a.name.localeCompare(b.name)).map(x => `<option value="${esc(x.id)}" ${r && r.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup>`).join("");
   const x = c ? c.x || 1 : 1;
-  const meta = r ? `<b>×${x}</b> serving · ${Math.round(r.cal * x)} kcal · ${Math.round(r.p * x)}P ${Math.round(r.c * x)}C ${Math.round(r.f * x)}F`
+  const meta = r ? (on ? `<b>×${x}</b> serving · ${Math.round(r.cal * x)} kcal · ${Math.round(r.p * x)}P ${Math.round(r.c * x)}C ${Math.round(r.f * x)}F${r.estimated ? ` <span class="est" title="Macros are estimates">est.</span>` : ""}` : `${esc(r.cuisine)}`)
     : (c && !r ? "Recipe was deleted" : "Choose a meal");
+  // Cooking signal (share of plan cooked) and a 1–5 rating, on the slot where the meal is cooked.
+  const key = `${d}-${s}`, ck = (state.plan.cooked || {})[key];
+  const cooked = r && isCookSlot(d, s) ? `<div class="cooked"><label><input type="checkbox" data-cooked="${key}" ${ck ? "checked" : ""}> Cooked</label>${ck ? `<select data-rating="${key}" aria-label="Rate this meal"><option value="">Rate</option>${[5,4,3,2,1].map(n => `<option value="${n}" ${ck.rating === n ? "selected" : ""}>${"★".repeat(n)}</option>`).join("")}</select>` : ""}</div>` : "";
   return `<div class="slot ${c && c.locked ? "locked" : ""}">
-    <div class="slot-top"><span class="label">${label}</span>
-      ${r ? `<span class="slot-actions"><button class="lock" data-action="view" data-id="${esc(r.id)}" data-x="${x}" title="Ingredients and instructions">Recipe</button>${state.readOnly ? "" : `<button class="lock" data-action="lock" data-d="${d}" data-s="${s}" aria-pressed="${!!c.locked}" title="${c.locked ? "Pinned: the planner won't change this" : "Pin this meal"}">${c.locked ? "Pinned" : "Pin"}</button>`}</span>` : ""}
+    <div class="slot-top"><span class="label">${label}${r && on ? ` <span class="ctag">· ${esc(r.cuisine)}</span>` : ""}</span>
+      ${r ? `<span class="slot-actions"><button class="lock" data-action="view" data-id="${esc(r.id)}" data-x="${x}" title="Ingredients and instructions">Recipe</button><button class="lock" data-action="lock" data-d="${d}" data-s="${s}" aria-pressed="${!!c.locked}" title="${c.locked ? "Pinned: the planner won't change this" : "Pin this meal"}">${c.locked ? "Pinned" : "Pin"}</button></span>` : ""}
     </div>
-    <select id="sl-${d}-${s}" data-d="${d}" data-s="${s}" aria-label="${DAYS[d]} ${label}" ${state.readOnly ? "disabled" : ""}>
+    <select id="sl-${d}-${s}" data-d="${d}" data-s="${s}" aria-label="${DAYS[d]} ${label}">
       <option value="">— Empty —</option>${opts}
     </select>
-    <div class="slot-meta">${meta}</div>${link ? `<div class="slot-link">${esc(link)}</div>` : ""}
+    <div class="slot-meta">${meta}</div>${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${cooked}
   </div>`;
 }
 
 function viewGroceries() {
-  const { items, cook } = groceries();
+  const { items, cook } = groceries(), H = household();
   if (!items.length) return `<div class="panel empty"><h2>Your list is empty</h2><p>Plan some meals and the grocery list builds itself.</p><button class="btn primary" data-action="goto" data-tab="plan">Go to week plan</button></div>`;
   const checked = state.plan.checked || {};
+  const buy = items.filter(i => !i.have), have = items.filter(i => i.have);
+  const keyId = k => esc(k.replace(/\W+/g, "-"));
   const groups = CATS.map(cat => {
-    const list = items.filter(i => (CATS.includes(i.category) ? i.category : "Other") === cat).sort((a, b) => a.name.localeCompare(b.name));
+    const list = buy.filter(i => (CATS.includes(i.category) ? i.category : "Other") === cat).sort((a, b) => a.name.localeCompare(b.name));
     if (!list.length) return "";
     return `<div class="cat"><h3><span>${esc(cat)}</span><span class="num">${list.length}</span></h3>
-      ${list.map(g => `<label class="gitem ${checked[g.key] ? "done" : ""}">
-        <input type="checkbox" id="g-${esc(g.key.replace(/\W+/g, "-"))}" data-gkey="${esc(g.key)}" ${checked[g.key] ? "checked" : ""}>
-        <span class="name">${esc(g.name)}</span><span class="amt">${esc(amountText(g))}</span>
-        <span class="used">${esc([...g.used].join(", "))}</span></label>`).join("")}</div>`;
+      ${list.map(g => `<div class="gitem ${checked[g.key] ? "done" : ""}">
+        <input type="checkbox" id="g-${keyId(g.key)}" data-gkey="${esc(g.key)}" ${checked[g.key] ? "checked" : ""}>
+        <label class="name" for="g-${keyId(g.key)}">${esc(g.name)}</label><span class="amt">${esc(amountText(g))}</span>
+        <button class="have-btn" data-action="have" data-key="${esc(g.key)}" title="Hide this from future lists until you add it back">I already have this</button>
+        <span class="used">${esc([...g.used].join(", "))}</span></div>`).join("")}</div>`;
   }).join("");
-  const main = items.filter(i => i.category !== STAPLE).length;
+  const haveList = have.length ? `<details class="cat"><summary class="label" style="cursor:pointer;padding:10px 0">Items you already have (${have.length}), hidden from the list</summary>
+      ${have.sort((a, b) => a.name.localeCompare(b.name)).map(g => `<div class="gitem"><span></span><span class="name">${esc(g.name)}</span><span class="amt muted">${esc(amountText(g))}</span>
+        <button class="have-btn" data-action="unhave" data-key="${esc(g.key)}">Running low? Add back</button></div>`).join("")}</details>` : "";
+  const otherHave = (state.settings.have || []).filter(k => !items.some(i => i.key === k));
   const prep = cook.sort((a, b) => b.portions - a.portions).map(c => {
     const batches = Math.ceil(c.portions / c.r.servings - 1e-9);
-    return `<li><button class="linkish" style="font-weight:600" data-action="view" data-id="${esc(c.r.id)}">${esc(c.r.name)}</button><br><span class="muted num" style="font-size:13px">${+c.portions.toFixed(2)} servings over ${[...c.days].join(", ")} · cook ${batches > 1 ? batches + " batches" : "1 batch"} (makes ${c.r.servings * batches})</span></li>`;
+    const left = c.meals.length > 1 ? ` · eaten ${c.meals.length} times (${[...c.days].join(", ")})` : ` · ${[...c.days].join(", ")}`;
+    return `<li><button class="linkish" style="font-weight:600" data-action="view" data-id="${esc(c.r.id)}">${esc(c.r.name)}</button><br><span class="muted num" style="font-size:13px">${+c.portions.toFixed(2)} servings for ${H} ${H === 1 ? "person" : "people"}${left} · cook ${batches > 1 ? batches + " batches" : "1 batch"} (recipe makes ${c.r.servings})</span></li>`;
   }).join("");
   return `<div class="grid2">
     <section class="panel">
-      <div class="row"><div><div class="bigstat num">${main}</div><div class="muted">items to buy, plus ${items.length - main} pantry staples</div></div>
+      <div class="row"><div><div class="bigstat num">${buy.length}</div><div class="muted">items to buy for ${H} ${H === 1 ? "person" : "people"}${have.length ? `, plus ${have.length} you already have` : ""}</div></div>
         <span class="spacer"></span><button class="btn" data-action="copy-list">Copy list</button><button class="btn ghost small" data-action="uncheck">Uncheck all</button></div>
       ${groups}
+      ${haveList}
+      ${otherHave.length ? `<p class="hint">You also marked ${otherHave.length} item${otherHave.length === 1 ? "" : "s"} you have that this week doesn't use.</p>` : ""}
     </section>
     <aside class="panel prep">
       <h2>Prep list</h2>
-      <p class="hint">How much of each recipe the week uses. Amounts on the left already account for these portions.</p>
+      <p class="hint">What to cook this week. Servings beyond one meal become leftovers for a later meal; amounts on the list already include them.</p>
       <ul>${prep}</ul>
     </aside>
   </div>`;
@@ -1218,20 +1303,21 @@ function viewRecipes() {
     const pc = r.p * 4, cc = r.c * 4, fc = r.f * 9, tot = (pc + cc + fc) || 1;
     const split = `<div class="split" title="Share of calories: protein ${Math.round(pc / tot * 100)}%, carbs ${Math.round(cc / tot * 100)}%, fat ${Math.round(fc / tot * 100)}%"><span style="width:${pc / tot * 100}%;background:var(--protein)"></span><span style="width:${cc / tot * 100}%;background:var(--carb)"></span><span style="width:${fc / tot * 100}%;background:var(--fat)"></span></div>`;
     return `<div class="rrow">
-    <div class="rname"><div class="nm"><button class="linkish" data-action="view" data-id="${esc(r.id)}">${esc(r.name)}</button>${r.example ? `<span class="tag">Example</span>` : ""}</div>
+    <div class="rname"><div class="nm"><button class="linkish" data-action="view" data-id="${esc(r.id)}">${esc(r.name)}</button>${r.example ? `<span class="tag">Example</span>` : ""}${r.estimated ? `<span class="est" title="Calories and macros are estimates, not from the source">Estimated macros</span>` : ""}</div>
       <div class="sub">${esc(r.cuisine)} · ${r.meals.map(m => SLOTS.find(s => s[0] === m)[1]).join(", ") || "Base recipe"} · makes ${r.servings}${r.portable ? " · car-friendly" : ""}</div>${split}</div>
     ${macroSummary(r, 1, hi)}
     <div class="ractions">${state.readOnly ? "" : `<button class="btn small" data-action="edit" data-id="${esc(r.id)}">Edit</button><button class="btn ghost small" data-action="del" data-id="${esc(r.id)}">Delete</button>`}</div>
   </div>`;
   }).join("");
-  const head = `<div class="rhead">${list.length} recipe${list.length === 1 ? "" : "s"} · calories and macros are per serving</div>`;
+  const head = `<div class="rhead">${list.length} recipe${list.length === 1 ? "" : "s"} · calories and macros are per serving · visible only to you</div>`;
   return `<div class="grid2" style="grid-template-columns:minmax(0,1fr)">
+    ${Object.keys(state.recipes).length < MIN_RECIPES ? `<div class="notice">You have ${Object.keys(state.recipes).length} of the ${MIN_RECIPES} recipes needed for your first plan.</div>` : ""}
     ${state.editing ? editorPanel() : ""}
-    ${state.importing ? importPanel() : ""}
+    ${state.importing && !state.editing ? importPanel() : ""}
     <section class="panel">
       <div class="row">
         <h2>Recipes</h2><span class="spacer"></span>
-        ${state.readOnly ? "" : `<button class="btn primary" data-action="new">Add recipe</button><button class="btn" data-action="import">Import recipes</button>`}
+        <button class="btn primary" data-action="import">Import recipes</button><button class="btn" data-action="new">Add by hand</button>
       </div>
       <div class="row">
         <div class="field" style="flex:1;min-width:180px"><input id="rsearch" type="search" placeholder="Search by name or ingredient" value="${esc(state.rsearch)}" aria-label="Search recipes"></div>
@@ -1243,12 +1329,34 @@ function viewRecipes() {
     </section></div>`;
 }
 
+// Every ingredient name in the library, so a line can be mapped to one the grocery list already knows.
+function knownIngredients() {
+  const s = new Set();
+  Object.values(state.recipes).forEach(r => r.ingredients.forEach(i => s.add(i.item)));
+  return [...s].sort();
+}
+function ingRow(i, n) {
+  const unitOpts = ["", "tsp", "tbsp", "cup", "fl oz", "ml", "l", "g", "kg", "oz", "lb", "clove", "can", "slice", "bunch", "head", "ear", "pinch"];
+  const u = String(i.unit || "");
+  return `<tr data-ing-row>
+    <td class="q"><input aria-label="Amount, row ${n}" data-f="qty" type="number" min="0" step="any" value="${i.qty == null ? "" : +(+i.qty).toFixed(3)}" placeholder="—"></td>
+    <td><input aria-label="Unit, row ${n}" data-f="unit" list="unit-list" value="${esc(u)}"></td>
+    <td class="it"><input aria-label="Ingredient, row ${n}" data-f="item" list="ing-list" value="${esc(i.item || "")}" required></td>
+    <td class="pr"><input aria-label="Prep note, row ${n}" data-f="prep" value="${esc(i.prep || "")}" placeholder="minced"></td>
+    <td><select aria-label="Store section, row ${n}" data-f="category">${CATS.map(c => `<option ${(i.category || guessCategory(i.item || "")) === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></td>
+    <td><button type="button" class="rm" data-action="rm-ing" aria-label="Remove row ${n}">×</button></td>
+  </tr>${i.line ? `<tr data-orig><td colspan="6" class="orig">From the source: ${esc(i.line)}</td></tr>` : ""}`;
+}
+// Add, edit, and the review-and-fix step after an import all use this form.
 function editorPanel() {
-  const r = state.editing === "new" ? { name: "", cuisine: "", meals: ["lunch","dinner"], servings: 2, cal: "", p: "", c: "", f: "", ingredients: [] } : state.recipes[state.editing];
+  const draft = state.editing === "draft" ? state.drafts[0] : null;
+  const r = draft || (state.editing === "new" ? { name: "", cuisine: "", meals: ["lunch","dinner"], servings: 2, cal: "", p: "", c: "", f: "", ingredients: [], estimated: false } : state.recipes[state.editing]);
   if (!r) return "";
-  const lines = r.ingredients.map(i => `${i.qty != null ? +(+i.qty).toFixed(3) + " " : ""}${i.unit ? i.unit + " " : ""}${i.item}${i.category && i.category !== guessCategory(i.item) ? " | " + i.category : ""}`).join("\n");
+  const title = draft ? `Review your import${state.drafts.length > 1 ? ` (${state.draftTotal - state.drafts.length + 1} of ${state.draftTotal})` : ""}` : state.editing === "new" ? "Add a recipe" : "Edit " + esc(r.name);
+  const rows = (r.ingredients.length ? r.ingredients : [{ item: "" }]).map((i, n) => ingRow(i, n + 1)).join("");
   return `<section class="panel">
-    <h2>${state.editing === "new" ? "Add a recipe" : "Edit " + esc(r.name)}</h2>
+    <h2>${title}</h2>
+    ${draft ? `<p class="hint">Check every field before saving. Fix anything the import got wrong, and pick an existing ingredient name where it's the same thing, so your grocery list can combine them.</p>` : ""}
     <form class="form" id="recipe-form">
       <div class="fgrid">
         <div class="field" style="grid-column:span 2"><label for="f-name">Name</label><input id="f-name" required value="${esc(r.name)}"></div>
@@ -1262,51 +1370,93 @@ function editorPanel() {
         <div class="field"><label for="f-c">Carbs (g)</label><input id="f-c" type="number" min="0" step="0.1" required value="${r.c}"></div>
         <div class="field"><label for="f-f">Fat (g)</label><input id="f-f" type="number" min="0" step="0.1" required value="${r.f}"></div>
       </div>
-      <div class="field"><label for="f-ing">Ingredients for the whole recipe, one per line</label>
-        <textarea class="code" id="f-ing" placeholder="600 g chicken breast&#10;2 bell pepper&#10;1 tbsp olive oil&#10;3 cloves garlic">${esc(lines)}</textarea>
-        <span class="hint">Amount, unit, then the ingredient. Add <span class="num">| Category</span> to override the grocery aisle. Use the same ingredient names across recipes so the list can combine them.</span></div>
+      <label class="toggle" style="font-weight:500"><input type="checkbox" id="f-est" ${r.estimated ? "checked" : ""}> These macros are estimates, not from the recipe source</label>
+      <div class="field"><span class="label">Ingredients for the whole recipe</span>
+        <div class="ing-wrap"><table class="ing-table"><thead><tr><th>Amount</th><th>Unit</th><th>Ingredient</th><th>Prep note</th><th>Store section</th><th></th></tr></thead><tbody id="ing-body">${rows}</tbody></table></div>
+        <datalist id="ing-list">${knownIngredients().map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+        <datalist id="unit-list">${["tsp","tbsp","cup","fl oz","ml","l","g","kg","oz","lb","clove","can","slice","bunch","head","ear","pinch"].map(n => `<option value="${n}">`).join("")}</datalist>
+        <div class="row"><button type="button" class="btn small" data-action="add-ing">Add ingredient</button><span class="hint">Lines with the same ingredient name merge on the grocery list. Prep notes are left off it.</span></div></div>
       <div class="field"><label for="f-steps">Instructions, one step per line</label>
         <textarea class="code" id="f-steps" style="font-family:var(--font-body);font-size:14px" placeholder="Heat the oil in a wok over high heat.&#10;Add the chicken and cook 4 to 5 minutes.">${esc((r.steps || []).join("\n"))}</textarea></div>
-      <div class="row"><button class="btn primary" type="submit">Save recipe</button><button class="btn ghost" type="button" data-action="cancel-edit">Cancel</button></div>
+      <div class="row"><button class="btn primary" type="submit">Save recipe</button>${draft && state.drafts.length > 1 ? `<button class="btn" type="button" data-action="skip-draft">Skip this one</button>` : ""}<button class="btn ghost" type="button" data-action="cancel-edit">Cancel</button></div>
     </form></section>`;
 }
 
+// Import: a link, a file (PDF, photo, Word, text) or pasted text goes to the importRecipe function, which returns drafts to review.
 function importPanel() {
+  const m = state.importMode || "url";
+  const tab = (k, l) => `<button type="button" data-action="imp-mode" data-m="${k}" aria-pressed="${m === k}">${l}</button>`;
+  const body = {
+    url: `<div class="field"><label for="imp-url">Recipe link</label><input id="imp-url" type="url" placeholder="https://www.example.com/recipes/chicken-tacos"></div>`,
+    file: `<div class="field"><label for="imp-file">PDF, photo, Word document or text file (up to 8 MB)</label><input id="imp-file" type="file" accept="application/pdf,image/*,.docx,.txt,.md"></div><p class="hint">A photo of a recipe card works. One file can hold several recipes; you'll review each one.</p>`,
+    text: `<div class="field"><label for="imp-paste">Paste a recipe</label><textarea class="code" id="imp-paste" style="font-family:var(--font-body);font-size:14px" placeholder="Paste the recipe text, including ingredients and steps"></textarea></div>`,
+    backup: `<div class="field"><label for="imp-backup">Backup file (JSON or CSV)</label><input id="imp-backup" type="file" accept=".json,.csv,application/json,text/csv"></div>
+      <label class="checks"><label><input type="checkbox" id="imp-totals"> Macros are for the whole recipe, not per serving</label></label>
+      <p class="hint">For moving a library you already have. Recipes are saved as they are, without a review step.</p>`
+  }[m];
   return `<section class="panel">
-    <h2>Import recipes</h2>
-    <p class="hint">Paste JSON or CSV. Macros should be per serving unless you tick the box below. Ingredients can be plain lines like <span class="num">200 g quinoa</span>.</p>
-    <div class="grid2">
-      <div class="form">
-        <textarea class="code" id="imp-text" placeholder="Paste JSON or CSV here"></textarea>
-        <label class="checks"><label><input type="checkbox" id="imp-totals"> Macros are for the whole recipe, not per serving</label></label>
-        <div class="row"><button class="btn primary" data-action="do-import">Import</button><button class="btn ghost" data-action="cancel-import">Cancel</button></div>
-        <div id="imp-result"></div>
-      </div>
-      <div class="form">
-        <span class="label">JSON</span>
-<pre class="sample">[{
-  "name": "Chicken Burrito Bowl",
-  "cuisine": "Mexican",
-  "meals": ["lunch", "dinner"],
-  "servings": 4,
-  "calories": 560, "protein": 45,
-  "carbs": 60, "fat": 14,
-  "ingredients": [
-    "600 g chicken breast",
-    "200 g brown rice",
-    "2 lime"
-  ],
-  "steps": [
-    "Cook the rice.",
-    "Grill the chicken and slice."
-  ]
-}]</pre>
-        <span class="label">CSV (one row per ingredient)</span>
-<pre class="sample">name,cuisine,meals,servings,calories,protein,carbs,fat,ingredient,qty,unit
-Burrito Bowl,Mexican,lunch;dinner,4,560,45,60,14,chicken breast,600,g
-Burrito Bowl,,,,,,,,brown rice,200,g</pre>
-      </div>
+    <div class="row"><h2>Import recipes</h2><span class="spacer"></span><button class="btn ghost small" data-action="cancel-import">Close</button></div>
+    <div class="seg" role="group" aria-label="Import from">${tab("url", "Link")}${tab("file", "PDF, photo or document")}${tab("text", "Paste text")}${tab("backup", "Backup file")}</div>
+    <div class="form">${body}
+      <div class="row"><button class="btn primary" data-action="do-import" ${state.importBusy ? "disabled" : ""}>${state.importBusy ? "Reading the recipe…" : "Import"}</button><button class="btn ghost" data-action="manual-entry">Enter a recipe by hand</button></div>
+      <div id="imp-result">${state.importError ? `<div class="notice">${esc(state.importError)} <button class="btn small" data-action="manual-entry">Enter it by hand</button></div>` : ""}</div>
     </div></section>`;
+}
+function fileToBase64(file) {
+  return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1]); fr.onerror = () => rej(fr.error); fr.readAsDataURL(file); });
+}
+// Photos are shrunk to 2000 px on the long side; recipe text stays readable and uploads stay small.
+function shrinkImage(file) {
+  return new Promise(resolve => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 2000 / Math.max(img.width, img.height));
+      const cv = document.createElement("canvas"); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      resolve(cv.toDataURL("image/jpeg", 0.85).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+async function runImport() {
+  const m = state.importMode || "url";
+  let payload = null;
+  if (m === "url") { const u = document.getElementById("imp-url").value.trim(); if (!u) return; payload = { url: u }; }
+  if (m === "text") { const t = document.getElementById("imp-paste").value.trim(); if (!t) return; payload = { text: t }; }
+  if (m === "file") {
+    const f = document.getElementById("imp-file").files[0]; if (!f) return;
+    if (f.size > 8 * 1024 * 1024 && !/^image\//.test(f.type)) { state.importError = "That file is over 8 MB. Try a smaller PDF or a photo."; return render(); }
+    const data = /^image\//.test(f.type) ? await shrinkImage(f) : await fileToBase64(f);
+    if (!data) { state.importError = "That image couldn't be opened. Try a JPEG or PNG."; return render(); }
+    payload = { file: { data, mime: /^image\//.test(f.type) ? "image/jpeg" : f.type, name: f.name } };
+  }
+  if (m === "backup") {
+    const f = document.getElementById("imp-backup").files[0]; if (!f) return;
+    const text = await f.text();
+    let res;
+    try { res = parseImport(text, { totals: document.getElementById("imp-totals").checked }); }
+    catch (err) { state.importError = `That file didn't parse. Check that it's valid JSON or a CSV with a header row. (${err.message})`; return render(); }
+    try { const data = JSON.parse(text); if (data && data.settings && typeof data.settings === "object") { state.settings = mergeSettings({ ...data.settings, onboarded: true }); saveSettings(); } } catch {}
+    if (res.ok.length) await saveRecipes(res.ok);
+    state.importError = res.bad.length ? `Imported ${res.ok.length}. Skipped ${res.bad.length}: ${res.bad.join("; ")}` : "";
+    state.importing = !!res.bad.length; render();
+    return toast(`Imported ${res.ok.length} recipe${res.ok.length === 1 ? "" : "s"}.`);
+  }
+  if (!window.firebase || !auth) { state.importError = "Import needs the online app. Sign in and try again."; return render(); }
+  state.importBusy = true; state.importError = ""; render();
+  try {
+    payload.known = knownIngredients().slice(0, 600);
+    const call = firebase.functions().httpsCallable("importRecipe", { timeout: 130000 });
+    const { data } = await call(payload);
+    const drafts = (data.recipes || []).map(x => { try { return normalizeRecipe({ ...x, estimated: x.macrosEstimated }); } catch { return null; } }).filter(Boolean);
+    if (!drafts.length) throw new Error("No recipe was found in that. Try another file, or enter it by hand.");
+    state.drafts = drafts; state.draftTotal = drafts.length; state.editing = "draft";
+  } catch (e) {
+    state.importError = (e && e.message && !/^internal$/i.test(e.message)) ? e.message : "The import didn't work. Try again, or enter the recipe by hand.";
+  }
+  state.importBusy = false; render(); window.scrollTo({ top: 0 });
 }
 
 // Recipe detail sheet. With a portion (opened from the plan) amounts are scaled to that portion.
@@ -1327,30 +1477,26 @@ function renderSheet() {
   const r = viewing && state.recipes[viewing.id];
   if (!r) { el.innerHTML = ""; document.body.style.overflow = ""; return; }
   document.body.style.overflow = "hidden";
-  const x = viewing.x, mult = x ? x / (r.servings || 1) : 1;
+  const H = household(), x = viewing.x, mult = (x || 1) * H / (r.servings || 1);
   const per = x || 1;
   const facts = [["cal", "kcal", ""], ["p", "Protein", "g"], ["c", "Carbs", "g"], ["f", "Fat", "g"]]
     .map(([k, l, u]) => `<div><span class="v">${Math.round(r[k] * per)}${u}</span><span class="k">${k === "cal" ? "" : macroDot({ p: "--protein", c: "--carb", f: "--fat" }[k])}${l}</span></div>`).join("");
   const ings = r.ingredients.map(i => {
-    let q = "";
-    if (i.qty != null && !isNaN(i.qty)) {
-      const u = UNITS[i.unit] || [i.unit || "", 1];
-      q = fmtAmount(u[0], i.qty * u[1] * mult);
-    }
-    return `<li><span class="q">${esc(q)}</span><span class="${q ? "" : "neg"}">${esc(i.item)}</span></li>`;
+    const q = ingAmount(i, mult);
+    return `<li><span class="q">${esc(q)}</span><span class="${q ? "" : "neg"}">${esc(i.item)}${i.prep ? `<span class="muted">, ${esc(i.prep)}</span>` : ""}</span></li>`;
   }).join("");
   const steps = (r.steps || []).length
     ? `<ol class="steps">${r.steps.map(s => `<li><span>${esc(s)}</span></li>`).join("")}</ol>`
     : `<p class="muted">No instructions saved for this recipe yet.${state.readOnly ? "" : ` <button class="btn small" data-action="edit-from-sheet" data-id="${esc(r.id)}">Add instructions</button>`}</p>`;
   const meals = r.meals.map(m => SLOTS.find(s => s[0] === m)[1]).join(", ");
-  const portionNote = x ? `Amounts for your ${x === 1 && r.servings === 1 ? "portion" : `×${x} serving portion`}` : (r.servings > 1 ? `Whole recipe · makes ${r.servings}` : "One serving");
+  const portionNote = `Scaled for ${H} ${H === 1 ? "person" : "people"}${x && x !== 1 ? ` at ×${x} servings each` : ""} · recipe makes ${r.servings}`;
   el.innerHTML = `<div class="sheet-back" data-action="close-sheet">
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
       <div class="sheet-head">
         <h2 id="sheet-title">${esc(r.name)}<div class="sub">${esc(r.cuisine)} · ${esc(meals)}${r.source ? " · " + esc(r.source) : ""}</div></h2>
         <button class="close" id="sheet-close" data-action="close-sheet" aria-label="Close recipe">×</button>
       </div>
-      ${macroSummary(r, 1, null, "Per serving")}
+      ${macroSummary(r, 1, null, r.estimated ? "Per serving · estimated, not from the source" : "Per serving")}
       ${x && x !== 1 ? `<div><h3><span>Your portion: ${x} servings</span></h3><div class="mfacts">${facts}</div></div>` : ""}
       ${mfpBlock(r, x)}
       <div><h3><span>Ingredients</span><span style="text-transform:none;letter-spacing:0;font-weight:500">${esc(portionNote)}</span></h3><ul class="ilist">${ings}</ul></div>
@@ -1455,6 +1601,9 @@ function viewTargets() {
   return `<div class="grid2">
     <section class="panel form">
       <h2>Daily targets</h2>
+      <label class="toggle"><input type="checkbox" data-flag="useTargets" ${S.useTargets ? "checked" : ""}> Plan toward daily calorie and macro targets</label>
+      <p class="hint">Optional. With targets on, they come first: each day lands within your tolerance, then variety, then the shortest grocery list. With them off, the plan ignores macros.</p>
+      <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px" ${S.useTargets ? "" : "disabled"}>
       <div class="fgrid">
         ${MACROS.map(([k, l, u]) => `<div class="field"><label for="t-${k}">${l} (${u})</label><input id="t-${k}" type="number" min="0" data-target="${k}" value="${t[k]}" ${dis}></div>`).join("")}
       </div>
@@ -1464,23 +1613,30 @@ function viewTargets() {
         ${MACROS.map(([k, l]) => `<div class="field"><label for="tol-${k}">${l} ± %</label><input id="tol-${k}" type="number" min="1" max="50" data-tol="${k}" value="${S.tol[k]}" ${dis}></div>`).join("")}
       </div>
       <p class="hint">A day counts as on target when every number is inside its band. Tighter bands mean fewer possible plans.</p>
+      </fieldset>
     </section>
     <section class="panel form">
+      <h2>Household</h2>
+      <div class="field" style="max-width:220px"><label for="household">People you cook for</label><input id="household" type="number" min="1" max="12" step="1" data-setting="household" value="${household()}"></div>
+      <p class="hint">Recipe amounts and the grocery list scale to this. Macros stay per person.</p>
       <h2>Meals and portions</h2>
       <div class="field"><span class="label">Meals each day</span><div class="checks">${SLOTS.map(([k, l]) => `<label><input type="checkbox" id="ms-${k}" data-mslot="${k}" ${S.slots[k] ? "checked" : ""} ${dis}> ${l}</label>`).join("")}</div></div>
       <div class="fgrid">
         <div class="field"><label for="pmin">Smallest portion (servings)</label><input id="pmin" type="number" min="0.25" max="3" step="0.25" data-setting="portionMin" value="${S.portionMin}" ${dis}></div>
         <div class="field"><label for="pmax">Largest portion (servings)</label><input id="pmax" type="number" min="0.5" max="4" step="0.25" data-setting="portionMax" value="${S.portionMax}" ${dis}></div>
-        <div class="field"><label for="maxrep">Max days per recipe</label><input id="maxrep" type="number" min="1" max="7" step="1" data-setting="maxRepeat" value="${S.maxRepeat}" ${dis}></div>
+        <div class="field"><label for="maxrep">Max days per snack</label><input id="maxrep" type="number" min="1" max="7" step="1" data-setting="maxRepeat" value="${S.maxRepeat}" ${dis}></div>
       </div>
-      <p class="hint">Allowing a recipe on more days means fewer groceries and more batch cooking. Lower it for more variety.</p>
+      <p class="hint">Portions only change when targets are on. Cooked meals never repeat in a week; snacks can, up to this many days.</p>
       <h2>Cook once, eat twice</h2>
       <div class="checks" style="flex-direction:column;align-items:flex-start;gap:8px">
         <label><input type="checkbox" data-flag="leftovers" ${S.leftovers ? "checked" : ""} ${dis}> Each dinner is next day's lunch (Sunday's dinner is Monday's lunch)</label>
         <label><input type="checkbox" data-flag="bfRotation" ${S.bfRotation ? "checked" : ""} ${dis}> Three breakfasts a week: Mon–Tue, Wed–Thu, Fri–Sun (Fri–Sun car-friendly)</label>
       </div>
       <p class="hint">Mark a recipe "Car-friendly" in its editor to make it eligible for Friday–Sunday breakfasts. Portions can still differ between the two meals so each day stays on target.</p>
-    </section></div>`;
+    </section></div>
+    <div class="grid2" style="margin-top:16px">${PRIVACY}
+      <section class="panel"><h2>Account</h2><p class="hint">Signed in as ${esc(state.user ? state.user.email : "a local test user")}. Your library: ${Object.keys(state.recipes).length} recipes.</p>
+        <div class="row"><button class="btn" data-action="export-backup">Download a backup</button>${state.user ? `<button class="btn ghost" data-action="sign-out">Sign out</button>` : ""}</div></section></div>`;
 }
 
 /* ---------- events ---------- */
@@ -1492,9 +1648,20 @@ function setTab(t) {
 function allDays() { return DAYS.map((_, i) => i); }
 function afterGenerate(res, what) {
   savePlan(); render();
+  const label = { breakfast: "breakfast", lunch: "lunch", dinner: "dinner" };
+  const short = Object.entries(res.shortBy || {}).map(([s, n]) => `${n} more ${label[s]} recipe${n > 1 ? "s" : ""}`);
   if (res.skipped.length) toast(`No recipes fit ${res.skipped.map(d => DAYS[d]).join(", ")}. Add recipes for every meal or widen the cuisine filter.`);
-  else if (res.offTarget.length) toast(`${res.offTarget.map(d => DAYS[d]).join(", ")} can't hit every target with these recipes. Try wider tolerances or more recipes.`);
+  else if (res.repeats && res.repeats.length) toast(`A meal had to repeat because there aren't enough recipes${short.length ? `: add ${short.join(" and ")}` : ""}, or widen the cuisine filter.`);
+  else if (res.offTarget.length) toast(`Couldn't hit every target: ${res.offTarget.map(d => `${DAYS[d]} ${dayMiss(d) ? dayMiss(d).text : ""}`).join("; ")}.`);
+  else if (res.cuisineMiss) toast(`${what} Only one cuisine fit your filters this week.`);
   else toast(what);
+}
+function exportBackup() {
+  const data = { app: "macro-prep-planner", exported: new Date().toISOString(), settings: state.settings, recipes: Object.values(state.recipes).map(stripRecipe) };
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
+  a.download = "meal-planner-backup.json"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 function busy(fn) {
   document.body.style.cursor = "progress";
@@ -1512,8 +1679,43 @@ document.addEventListener("click", async e => {
   if (a === "view") return openRecipe(b.dataset.id, b.dataset.x, b);
   if (a === "copy-mfp") { const r = state.recipes[b.dataset.id]; if (r) copyText(mfpLine(r, b.dataset.x ? +b.dataset.x : null), "Copied. Paste into MyFitnessPal Quick Add."); return; }
   if (a === "copy-mfp-day") return copyText(mfpDayText(d), `Copied ${DAYS[d]}'s meals for MyFitnessPal.`);
-  if (state.readOnly && !["goto","copy-list"].includes(a)) return;
   switch (a) {
+    case "sign-in": return signIn();
+    case "sign-out": return signOut();
+    case "finish-onboarding": {
+      const h = Math.round(+document.getElementById("ob-household").value);
+      if (!(h >= 1)) { toast("Enter how many people you cook for."); return; }
+      S.household = h;
+      S.useTargets = document.getElementById("ob-targets").checked;
+      if (S.useTargets) for (const [k] of MACROS) { const v = parseFloat(document.getElementById("ob-" + k).value); if (v >= 0) S.targets[k] = v; }
+      S.onboarded = true; saveSettings();
+      state.tab = "recipes"; state.importing = true; return render();
+    }
+    case "goto-import": state.editing = null; state.importing = true; return setTab("recipes");
+    case "goto-new": state.importing = false; state.editing = "new"; return setTab("recipes");
+    case "have": case "unhave": {
+      const k = b.dataset.key, set = new Set(S.have || []);
+      if (a === "have") set.add(k); else set.delete(k);
+      S.have = [...set]; saveSettings();
+      toast(a === "have" ? "Hidden from your lists. Find it under Items you already have." : "Added back to your list.");
+      return render();
+    }
+    case "imp-mode": state.importMode = b.dataset.m; state.importError = ""; return render();
+    case "do-import": return runImport();
+    case "manual-entry": state.importError = ""; state.importing = false; state.editing = "new"; render(); document.getElementById("f-name")?.focus(); return;
+    case "add-ing": {
+      const body = document.getElementById("ing-body");
+      body.insertAdjacentHTML("beforeend", ingRow({ item: "" }, body.querySelectorAll("[data-ing-row]").length + 1));
+      body.querySelector("[data-ing-row]:last-of-type [data-f=item]")?.focus();
+      return;
+    }
+    case "rm-ing": {
+      const tr = b.closest("tr"), next = tr.nextElementSibling;
+      if (next && next.hasAttribute("data-orig")) next.remove();
+      tr.remove(); return;
+    }
+    case "skip-draft": state.drafts.shift(); if (!state.drafts.length) state.editing = null; render(); window.scrollTo({ top: 0 }); return;
+    case "export-backup": return exportBackup();
     case "edit-from-sheet": viewing = null; renderSheet(); state.editing = b.dataset.id; state.importing = false; state.tab = "recipes"; render(); window.scrollTo({ top: 0 }); return;
     case "goto": state.editing = null; return setTab(b.dataset.tab);
     case "cuisine-all": S.cuisines = []; saveSettings(); return render();
@@ -1523,11 +1725,10 @@ document.addEventListener("click", async e => {
       saveSettings(); return render();
     }
     case "gen-lean": return busy(() => {
-      const before = weekSummary().items;
       const res = generate("lean", allDays());
-      afterGenerate(res, `Planned the week with ${weekSummary().items} grocery items.`);
+      afterGenerate(res, `Planned a varied week with ${weekSummary().unique} unique ingredients.`);
     });
-    case "gen-random": return busy(() => afterGenerate(generate("random", allDays()), "Here's a random week. Every day still hits your targets."));
+    case "gen-random": return busy(() => afterGenerate(generate("random", allDays()), "Here's a random week that still follows your rules."));
     case "fill-empty": return busy(() => {
       const days = allDays().filter(i => !dayStatus(i).complete);
       if (!days.length) return toast("Every day is already filled.");
@@ -1558,7 +1759,6 @@ document.addEventListener("click", async e => {
       return;
     }
     case "uncheck": state.plan.checked = {}; savePlan(); return render();
-    case "load-examples": await saveRecipes(exampleRecipes()); toast("Example recipes loaded."); return render();
     case "remove-examples": {
       if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "Click again to remove"; return; }
       const ids = Object.values(state.recipes).filter(r => r.example).map(r => r.id);
@@ -1566,7 +1766,7 @@ document.addEventListener("click", async e => {
     }
     case "new": state.editing = "new"; state.importing = false; render(); document.getElementById("f-name")?.focus(); return;
     case "edit": state.editing = b.dataset.id; state.importing = false; render(); window.scrollTo({ top: 0 }); return;
-    case "cancel-edit": state.editing = null; return render();
+    case "cancel-edit": state.editing = null; state.drafts = []; return render();
     case "del": return askDelete(b.dataset.id, b);
     case "confirm-del": {
       const id = b.dataset.id, name = state.recipes[id]?.name;
@@ -1578,24 +1778,8 @@ document.addEventListener("click", async e => {
       toast(`Deleted ${name}.${removed ? ` Cleared it from ${removed} meal${removed > 1 ? "s" : ""} in your plan.` : ""}`);
       return render();
     }
-    case "import": state.importing = true; state.editing = null; render(); document.getElementById("imp-text")?.focus(); return;
-    case "cancel-import": state.importing = false; return render();
-    case "do-import": {
-      const text = document.getElementById("imp-text").value, out = document.getElementById("imp-result");
-      if (!text.trim()) return;
-      let res;
-      try { res = parseImport(text, { totals: document.getElementById("imp-totals").checked }); }
-      catch (err) { out.innerHTML = `<div class="notice">That didn't parse. Check that it's valid JSON or a CSV with a header row. (${esc(err.message)})</div>`; return; }
-      if (res.ok.length) await saveRecipes(res.ok);
-      state.importing = !!res.bad.length;
-      render();
-      toast(`Imported ${res.ok.length} recipe${res.ok.length === 1 ? "" : "s"}.`);
-      if (res.bad.length) {
-        document.getElementById("imp-text").value = text;
-        document.getElementById("imp-result").innerHTML = `<div class="notice">Imported ${res.ok.length}. Skipped ${res.bad.length}:<br>${res.bad.map(esc).join("<br>")}</div>`;
-      }
-      return;
-    }
+    case "import": state.importing = true; state.editing = null; state.importError = ""; render(); window.scrollTo({ top: 0 }); return;
+    case "cancel-import": state.importing = false; state.importError = ""; return render();
     case "sync-cal": S.targets.cal = Math.round(S.targets.p * 4 + S.targets.c * 4 + S.targets.f * 9); saveSettings(); return render();
   }
 });
@@ -1627,11 +1811,28 @@ document.addEventListener("change", e => {
   const S = state.settings;
   if (t.matches("[data-target]")) { const v = parseFloat(t.value); if (v >= 0) { S.targets[t.dataset.target] = v; saveSettings(); render(); } return; }
   if (t.matches("[data-tol]")) { const v = parseFloat(t.value); if (v > 0) { S.tol[t.dataset.tol] = v; saveSettings(); render(); } return; }
-  if (t.matches("[data-flag]")) { S[t.dataset.flag] = t.checked; saveSettings(); poolCache.clear(); return render(); }
+  if (t.matches("[data-flag]")) { S[t.dataset.flag] = t.checked; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
+  if (t.id === "ob-targets") { document.getElementById("ob-tfields").hidden = !t.checked; return; }
+  // Naming an ingredient picks its store section, unless the section was chosen by hand.
+  if (t.matches("#ing-body [data-f=item]")) {
+    const sel = t.closest("tr").querySelector("[data-f=category]");
+    if (!sel.dataset.touched) { const known = Object.values(state.recipes).flatMap(r => r.ingredients).find(i => i.item === t.value.trim().toLowerCase()); sel.value = known ? known.category : guessCategory(t.value); }
+    return;
+  }
+  if (t.matches("#ing-body [data-f=category]")) { t.dataset.touched = "1"; return; }
+  if (t.matches("[data-cooked]")) {
+    state.plan.cooked = state.plan.cooked || {};
+    if (t.checked) state.plan.cooked[t.dataset.cooked] = { at: new Date().toISOString() }; else delete state.plan.cooked[t.dataset.cooked];
+    savePlan(); return render();
+  }
+  if (t.matches("[data-rating]")) {
+    const c = (state.plan.cooked || {})[t.dataset.rating]; if (c) { c.rating = t.value ? +t.value : null; savePlan(); }
+    return;
+  }
   if (t.matches("[data-mslot]")) { S.slots[t.dataset.mslot] = t.checked; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
   if (t.matches("[data-setting]")) {
     const v = parseFloat(t.value); if (!(v > 0)) return;
-    S[t.dataset.setting] = v;
+    S[t.dataset.setting] = t.dataset.setting === "household" ? Math.round(v) : v;
     if (S.portionMin > S.portionMax) S.portionMax = S.portionMin;
     saveSettings(); return render();
   }
@@ -1651,20 +1852,39 @@ document.addEventListener("submit", async e => {
   e.preventDefault();
   const val = id => document.getElementById(id).value;
   const meals = SLOTS.map(s => s[0]).filter(k => document.getElementById("f-meal-" + k).checked);
+  const isDraft = state.editing === "draft", draft = isDraft ? state.drafts[0] : null;
+  const existing = !isDraft && state.editing !== "new" ? state.recipes[state.editing] : null;
+  const ingredients = [...document.querySelectorAll("#ing-body [data-ing-row]")].map(tr => {
+    const f = k => tr.querySelector(`[data-f=${k}]`).value.trim();
+    const item = f("item").toLowerCase();
+    if (!item) return null;
+    const qty = f("qty") === "" ? null : parseFloat(f("qty"));
+    const orig = tr.nextElementSibling && tr.nextElementSibling.hasAttribute("data-orig") ? tr.nextElementSibling.textContent.replace(/^From the source:\s*/, "") : "";
+    return { item, qty: isNaN(qty) ? null : qty, unit: f("unit").toLowerCase(), prep: f("prep"), category: f("category"), ...(orig ? { line: orig } : {}) };
+  }).filter(Boolean);
+  if (!ingredients.length) { toast("Add at least one ingredient."); return; }
   try {
     const r = normalizeRecipe({
-      id: state.editing === "new" ? undefined : state.editing,
+      id: existing ? existing.id : undefined,
       name: val("f-name"), cuisine: val("f-cuisine") || "Other", meals: meals.length ? meals : ["lunch","dinner"],
       servings: val("f-serv"), calories: val("f-cal"), protein: val("f-p"), carbs: val("f-c"), fat: val("f-f"),
-      ingredients: val("f-ing").split("\n").filter(l => l.trim()),
-      steps: val("f-steps").split("\n").filter(l => l.trim()),
-      example: state.editing !== "new" && state.recipes[state.editing]?.example,
-      source: state.editing !== "new" ? state.recipes[state.editing]?.source : undefined,
-      mfp: state.editing !== "new" ? state.recipes[state.editing]?.mfp : undefined,
+      ingredients, steps: val("f-steps").split("\n").filter(l => l.trim()),
+      estimated: document.getElementById("f-est").checked,
+      example: existing ? existing.example : false,
+      source: existing ? existing.source : isDraft ? "Imported" : undefined,
+      mfp: existing ? existing.mfp : undefined,
       portable: document.getElementById("f-portable").checked
     });
     await saveRecipes([r]);
-    state.editing = null; toast(`Saved ${r.name}.`); render();
+    if (isDraft) {
+      state.drafts.shift();
+      if (state.drafts.length) { toast(`Saved ${r.name}. Next one to review.`); render(); window.scrollTo({ top: 0 }); return; }
+      state.importing = true;
+    }
+    state.editing = null;
+    const n = Object.keys(state.recipes).length;
+    toast(`Saved ${r.name}.${n < MIN_RECIPES ? ` ${MIN_RECIPES - n} more to unlock your first plan.` : n === MIN_RECIPES ? " Plan generation is unlocked." : ""}`);
+    render();
   } catch (err) { toast(`Can't save: the recipe is ${err.message}.`); }
 });
 
@@ -1672,7 +1892,8 @@ document.addEventListener("submit", async e => {
 (function init() {
   const h = (location.hash || "").slice(1);
   state.tab = ["plan","groceries","recipes","targets"].includes(h) ? h : (lsGet("mpp.tab") || "plan");
-  if (!window.claude || !window.claude.use) { state.mode = "local"; loadLocal(); render(); return; }
   boot();
 })();
 </script>
+</body>
+</html>

@@ -1,9 +1,21 @@
 # Meal Planner
 
-Macro Prep Planner: a single-file app (`macro-prep-planner.html`) published as a Claude artifact at https://claude.ai/artifact/5A7gHTp8iMiAsQLHve2ewE. Recipes, targets and the week plan live in the artifact's database, not in this repo.
+Macro Prep Planner: a single-file web app (`public/index.html`) hosted on Firebase. Each person signs in with Google and gets a private library: their data lives in Firestore under `users/{uid}/` (`recipes/{id}`, `app/settings`, `app/plan`), and `firestore.rules` lets only that user read or write it. Recipe import runs in a Cloud Function (`functions/index.js`, `importRecipe`) that calls the Claude API; the key is the Firebase secret `ANTHROPIC_API_KEY` and must never appear in the HTML or the repo. The old Claude artifact (https://claude.ai/artifact/5A7gHTp8iMiAsQLHve2ewE) is retired; don't republish it.
+
+Product requirements: the Meal Planner PRD (https://claude.ai/artifact/9BXoW42Dy7DLeDKsfsdaY3). Its acceptance criteria are the spec.
+
+## Deploying
+
+- Firebase CLI: `npx firebase-tools@13.29.1 <command>` (no global install on this Mac).
+- `firebase deploy --only hosting` for HTML changes; `--only firestore:rules` for rules; `--only functions` for the import function.
+- Without `FIREBASE_CONFIG` set in `public/index.html`, the app runs locally on browser storage (handy for testing at http://localhost:8765/public/index.html).
+- Never commit recipe data (`recipes.json`, `*backup*.json`): the recipes are copyrighted (meal kits, a coach) and private.
 
 ## How the week is planned
 
+- **Rules, in priority order (PRD):** macro targets when set (each day within its tolerance; ±10% by default, Nora uses ±3%), then variety (no recipe cooked twice in the week, at least 2 cuisines unless "Minimize groceries" is on), then the fewest unique ingredients. Items marked "I already have this" (`settings.have`) don't count. Snacks aren't cooked, so they may repeat up to `maxRepeat` days but not reuse a cooked meal. Targets are optional (`useTargets`); without them everyone eats one serving.
+- **Household size** (`household`) scales recipe amounts and the grocery list; macros stay per person.
+- **15-recipe minimum** before the first plan (`MIN_RECIPES`).
 - **Leftovers:** each dinner is cooked once and eaten again as the next day's lunch (Sunday's dinner is Monday's lunch). Setting `leftovers` turns this on and it is on by default. Picking, pinning or clearing either slot changes both. Portions may differ between the two meals so each day still hits its targets.
 - **Breakfast rotation:** setting `bfRotation`, also on by default, gives three breakfasts a week: Mon–Tue, Wed–Thu and Fri–Sun. Fri–Sun breakfasts must be car-friendly: recipes with `portable: true`, which covers handhelds like burritos, wraps, muffins, bagel or English-muffin sandwiches, plus drinkable smoothies and shakes. Tag new car-friendly breakfasts with `portable: true`.
 - Recipe ids by source: `st-` Strong, `hp-` Coach Greg, `my-` Homemade, `hf-` HelloFresh, `gc-` Green Chef, `ba-` Blue Apron, plus the monthly pack prefixes (`bk-`, `jan-`, `oct-` and so on).
@@ -15,7 +27,7 @@ MyFitnessPal has no public API, so the app offers two manual paths and Claude ca
 - **Barcode:** only recipes with an `mfp` field (`{format: "UPC" | "UPCE", code}`) show a barcode. These are the codes printed in the Coach Greg packs, decoded from the PDFs' barcode images, and they scan because the coach's foods are already in MyFitnessPal's database. Don't generate barcodes for other recipes: Nora's MyFitnessPal app gives no way to link a new barcode to a food, and the website's create-food form has no barcode field, so generated codes always scan as "no match" (tried and removed).
 - **Search:** recipes without a barcode are created as public foods on myfitnesspal.com (My Foods), with brand `Homemade` (`my-` ids), `Strong` (`st-`), `Coach Greg` (`hp-`), `HelloFresh` (`hf-`), `Green Chef` (`gc-`) or `Blue Apron` (`ba-`), description = recipe name, 1 serving, servings per container = recipe servings, and calories, fat, carbs and protein per serving. The recipe view tells Nora to search "<brand> <name>". When a recipe is added or its macros change, update the matching MyFitnessPal food too.
 - **Quick Add copy:** every recipe view and day card can copy calories, carbs, fat and protein (MyFitnessPal's Quick Add field order) at the planned portion.
-- **Claude logs it in Chrome:** when Nora asks (for example "log today's lunch"), read the plan (`app/plan`) and recipes from the artifact database, compute each meal's numbers at its portion (`recipe macros × x`), then use Claude in Chrome on myfitnesspal.com, signed in as Nora, to add each meal to the right Diary section with Quick Add. Show the entries and get her OK before saving each one. Only do this when she asks; never log meals on your own.
+- **Claude logs it in Chrome:** when Nora asks (for example "log today's lunch"), read the plan and recipes (Nora can export them from Targets → Download a backup, or share her screen), compute each meal's numbers at its portion (`recipe macros × x`), then use Claude in Chrome on myfitnesspal.com, signed in as Nora, to add each meal to the right Diary section with Quick Add. Show the entries and get her OK before saving each one. Only do this when she asks; never log meals on your own.
 
 ## Git workflow
 
@@ -23,6 +35,6 @@ MyFitnessPal has no public API, so the app offers two manual paths and Claude ca
 - Write a clear commit message: a short summary line saying what changed, then a body explaining why when it isn't obvious.
 - One commit per requested change. Don't bundle unrelated changes.
 - Before committing, check the staged diff for API keys, tokens, passwords or other secrets, and never commit `.env` files.
-- If a change only touched the artifact database (adding or editing recipes, targets or plans), there's nothing to commit. Say so instead of making an empty commit.
-- If the HTML changed, also republish the artifact so the live app matches the repo.
+- If a change only touched someone's data in Firestore (recipes, targets or plans), there's nothing to commit. Say so instead of making an empty commit.
+- If the HTML, rules or function changed, also deploy to Firebase so the live app matches the repo.
 - `gh` lives at `/opt/homebrew/bin/gh`, which may not be on PATH.

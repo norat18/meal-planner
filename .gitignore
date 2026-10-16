@@ -19,3 +19,9 @@ dist/
 __pycache__/
 .venv/
 venv/
+
+# Firebase local cache and recipe data (recipes are private and copyrighted; never commit them)
+.firebase/
+.runtimeconfig.json
+recipes.json
+*backup*.json
