@@ -371,10 +371,14 @@ const DEFAULT_SETTINGS = {
   leftovers: true,   // each dinner is cooked once and eaten again as the next day's lunch
   bigBatches: 0,     // big batches the planner places each week (on top of any picked by hand)
   batchSize: 4,      // meals a big batch covers: the dinner plus the next meals in a row
-  bfRotation: true   // three breakfasts a week: Mon–Tue, Wed–Thu, Fri–Sun (Fri–Sun must be car-friendly)
+  bfRotation: true,  // repeat breakfasts in blocks (off = a different breakfast every day)
+  bfMode: "three"    // "three": Mon–Tue, Wed–Thu, Fri–Sun · "two": Mon–Thu, Fri–Sun. Fri–Sun is always car-friendly
 };
-const BF_GROUPS = [[0, 1], [2, 3], [4, 5, 6]];
-const CAR_GROUP = 2;
+const BF_PATTERNS = { three: [[0, 1], [2, 3], [4, 5, 6]], two: [[0, 1, 2, 3], [4, 5, 6]] };
+function bfGroups() { return BF_PATTERNS[state.settings.bfMode] || BF_PATTERNS.three; }
+// The last block (Fri–Sun) is eaten in the car.
+function isCarGroup(g) { return g === bfGroups().length - 1; }
+function bfLabel(g) { return `${DAYS[g[0]].slice(0, 3)}–${DAYS[g[g.length - 1]].slice(0, 3)}`; }
 
 /* Example recipes. Macros are per serving; ingredient amounts are for the whole recipe. */
 const EXAMPLES = [
@@ -677,7 +681,7 @@ function linkMode() {
   const S = state.settings, act = activeSlots();
   return { lo: !!S.leftovers && act.includes("lunch") && act.includes("dinner"), bf: !!S.bfRotation && act.includes("breakfast") };
 }
-function bfGroup(d) { return BF_GROUPS.findIndex(g => g.includes(d)); }
+function bfGroup(d) { return bfGroups().findIndex(g => g.includes(d)); }
 // Lunches and dinners as "runs": one cooking covers a run of meals in a row. The week is a loop of 14 slots
 // (slot 2d = day d's lunch, 2d+1 = its dinner; Sunday's dinner runs into Monday's lunch). By default each dinner
 // also covers the next lunch. A big batch (plan.batch[d] = { k, auto }) makes day d's dinner cover the next k
@@ -712,7 +716,7 @@ function runOf(d, s, runs) { return (runs || mealRuns()).find(r => r.slots.some(
 // Every slot that must hold the same recipe as [d, s], including itself.
 function linkedSlots(d, s) {
   const L = linkMode();
-  if (s === "breakfast" && L.bf) return BF_GROUPS[bfGroup(d)].map(x => [x, "breakfast"]);
+  if (s === "breakfast" && L.bf) return bfGroups()[bfGroup(d)].map(x => [x, "breakfast"]);
   if (s === "lunch" || s === "dinner") { const r = runOf(d, s); if (r) return r.slots; }
   return [[d, s]];
 }
@@ -733,7 +737,7 @@ function relink(oldRuns) {
 }
 // The slot where a linked meal is cooked (the others are leftovers or repeats of it).
 function isCookSlot(d, s) { const l = linkedSlots(d, s); return l[0][0] === d && l[0][1] === s; }
-function isCarDay(d, s) { return s === "breakfast" && linkMode().bf && bfGroup(d) === CAR_GROUP; }
+function isCarDay(d, s) { return s === "breakfast" && linkMode().bf && isCarGroup(bfGroup(d)); }
 function carFriendly(ids) { const c = ids.filter(id => state.recipes[id] && state.recipes[id].portable); return c.length ? c : ids; }
 function slotChoices(d, s) {
   const ids = eligibleIds(s, state.plan.days[d].cuisine);
@@ -744,7 +748,7 @@ function slotChoices(d, s) {
 function weekVars() {
   const act = activeSlots(), L = linkMode(), vars = [];
   if (act.includes("breakfast")) {
-    if (L.bf) BF_GROUPS.forEach(g => vars.push({ kind: "bf", cook: g[0], slots: g.map(x => [x, "breakfast"]) }));
+    if (L.bf) bfGroups().forEach(g => vars.push({ kind: "bf", cook: g[0], slots: g.map(x => [x, "breakfast"]) }));
     else DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, "breakfast"]] }));
   }
   if (act.includes("lunch") || act.includes("dinner")) mealRuns().forEach(r => vars.push({ kind: r.slots.length > 1 ? "din" : "one", cook: r.slots[0][0], slots: r.slots, k: r.k }));
@@ -1285,7 +1289,7 @@ function viewPlan() {
       <button class="btn ghost small" data-action="clear-unlocked">Clear unpinned</button>
       <button class="btn ghost small" data-action="clear-all">Clear all</button>
     </div>
-    <p class="hint">No recipe is cooked twice, and the week mixes at least 2 cuisines${S.minimize ? " (relaxed while Minimize groceries is on)" : ""}.${on ? " Macro targets come first, then variety, then the shortest list." : " Among varied weeks, the planner picks the one with the fewest unique ingredients."}${L.lo ? " Each dinner comes back as the next day's lunch." : ""}${L.bf ? " Breakfast repeats Mon–Tue, Wed–Thu and Fri–Sun, with car-friendly picks for Fri–Sun." : ""} Pick a meal yourself and it gets pinned.</p>
+    <p class="hint">No recipe is cooked twice, and the week mixes at least 2 cuisines${S.minimize ? " (relaxed while Minimize groceries is on)" : ""}.${on ? " Macro targets come first, then variety, then the shortest list." : " Among varied weeks, the planner picks the one with the fewest unique ingredients."}${L.lo ? " Each dinner comes back as the next day's lunch." : ""}${L.bf ? ` Breakfast repeats ${bfGroups().map(bfLabel).join(", ").replace(/, ([^,]*)$/, " and $1")}, with car-friendly picks for Fri–Sun.` : ""} Pick a meal yourself and it gets pinned.</p>
   </section>
   <div class="week">${days}</div>`;
 }
@@ -1346,8 +1350,8 @@ function slotCell(d, s) {
     batchSel = `<label class="cooked">Makes <select data-batch="${d}" aria-label="${DAYS[d]} dinner makes">${[2, 3, 4].map(n => `<option value="${n}" ${k === n ? "selected" : ""}>${n} meals</option>`).join("")}</select>${b && b.auto ? ` <span class="ctag">planner's pick</span>` : ""}</label>`;
   }
   if (s === "breakfast" && L.bf) {
-    const g = BF_GROUPS[bfGroup(d)];
-    link = `Same breakfast ${DAYS[g[0]].slice(0, 3)}–${DAYS[g[g.length - 1]].slice(0, 3)}${bfGroup(d) === CAR_GROUP ? " · car-friendly" : ""}`;
+    const g = bfGroups()[bfGroup(d)];
+    link = `Same breakfast ${bfLabel(g)}${isCarGroup(bfGroup(d)) ? " · car-friendly" : ""}`;
   }
   if (r && !ids.includes(r.id)) ids.unshift(r.id);
   const byC = {};
@@ -1771,9 +1775,13 @@ function viewTargets() {
       </div>
       <p class="hint">Portions only change when targets are on. Cooked meals never repeat in a week; snacks can, up to this many days.</p>
       <h2>Cook once, eat twice</h2>
-      <div class="checks" style="flex-direction:column;align-items:flex-start;gap:8px">
+      <div class="checks" style="flex-direction:column;align-items:flex-start;gap:8px;min-width:0">
         <label><input type="checkbox" data-flag="leftovers" ${S.leftovers ? "checked" : ""} ${dis}> Each dinner is next day's lunch (Sunday's dinner is Monday's lunch)</label>
-        <label><input type="checkbox" data-flag="bfRotation" ${S.bfRotation ? "checked" : ""} ${dis}> Three breakfasts a week: Mon–Tue, Wed–Thu, Fri–Sun (Fri–Sun car-friendly)</label>
+        <label><input type="checkbox" data-flag="bfRotation" ${S.bfRotation ? "checked" : ""} ${dis}> Repeat breakfasts, with a car-friendly one Fri–Sun:</label>
+        <select data-text="bfMode" aria-label="Breakfast pattern" ${S.bfRotation ? "" : "disabled"} style="margin-left:26px;width:calc(100% - 26px);min-width:0;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:6px 8px">
+          <option value="three" ${S.bfMode !== "two" ? "selected" : ""}>Three a week: Mon–Tue · Wed–Thu · Fri–Sun</option>
+          <option value="two" ${S.bfMode === "two" ? "selected" : ""}>Two a week: Mon–Thu · Fri–Sun</option>
+        </select>
       </div>
       <div class="fgrid">
         <div class="field"><label for="bigb">Big batches per week</label><select id="bigb" data-num="bigBatches" ${S.leftovers ? "" : "disabled"}>${[0, 1, 2, 3].map(n => `<option value="${n}" ${+S.bigBatches === n ? "selected" : ""}>${n === 0 ? "None" : n}</option>`).join("")}</select></div>
@@ -1959,6 +1967,18 @@ document.addEventListener("change", e => {
   const S = state.settings;
   if (t.matches("[data-target]")) { const v = parseFloat(t.value); if (v >= 0) { S.targets[t.dataset.target] = v; saveSettings(); render(); } return; }
   if (t.matches("[data-tol]")) { const v = parseFloat(t.value); if (v > 0) { S.tol[t.dataset.tol] = v; saveSettings(); render(); } return; }
+  if (t.matches("select[data-text]")) {
+    const old = clone(state.plan.days.map(d => d.slots.breakfast));
+    S[t.dataset.text] = t.value; saveSettings();
+    // Re-link breakfasts to the new blocks: each block takes its first day's breakfast; blocks with none stay empty.
+    if (t.dataset.text === "bfMode") {
+      bfGroups().forEach(g => { const src = g.map(d => old[d]).find(c => c && state.recipes[c.id]);
+        g.forEach(d => { if (src) state.plan.days[d].slots.breakfast = { id: src.id, x: 1, locked: !!src.locked }; else delete state.plan.days[d].slots.breakfast; }); });
+      DAYS.forEach((_, d) => rebalance(d)); savePlan();
+      toast("Breakfast pattern changed. Plan the week to pick the best breakfasts for it.");
+    }
+    return render();
+  }
   if (t.matches("select[data-num]")) { S[t.dataset.num] = +t.value; saveSettings(); toast("Saved. Plan the week to apply it."); return render(); }
   if (t.matches("[data-flag]")) { S[t.dataset.flag] = t.checked; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
   if (t.id === "ob-targets") { document.getElementById("ob-tfields").hidden = !t.checked; return; }
