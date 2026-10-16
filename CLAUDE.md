@@ -18,6 +18,7 @@ Product requirements: the Meal Planner PRD (https://claude.ai/artifact/9BXoW42Dy
 - **Household size** (`household`) scales recipe amounts and the grocery list; macros stay per person.
 - **15-recipe minimum** before the first plan (`MIN_RECIPES`).
 - **Leftovers:** each dinner is cooked once and eaten again as the next day's lunch (Sunday's dinner is Monday's lunch). Setting `leftovers` turns this on and it is on by default. Picking, pinning or clearing either slot changes both. Portions may differ between the two meals so each day still hits its targets.
+- **Big batches:** a dinner can make 2 (default), 3 or 4 meals; extra meals fill the next slots in a row (4 = that dinner, next lunch, next dinner, the lunch after), via `plan.batch[day] = { k, auto }`. Hand-picked batches (`auto: false`) are kept; the planner places `settings.bigBatches` more of size `batchSize` when planning a full week, at least 2 days apart. A lunch left over after an odd batch is cooked fresh.
 - **Breakfast rotation:** setting `bfRotation`, also on by default, gives three breakfasts a week: Mon–Tue, Wed–Thu and Fri–Sun. Fri–Sun breakfasts must be car-friendly: recipes with `portable: true`, which covers handhelds like burritos, wraps, muffins, bagel or English-muffin sandwiches, plus drinkable smoothies and shakes. Tag new car-friendly breakfasts with `portable: true`.
 - Recipe ids by source: `st-` Strong, `hp-` Coach Greg, `my-` Homemade, `hf-` HelloFresh, `gc-` Green Chef, `ba-` Blue Apron, plus the monthly pack prefixes (`bk-`, `jan-`, `oct-` and so on).
 

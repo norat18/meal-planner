@@ -369,6 +369,8 @@ const DEFAULT_SETTINGS = {
   onboarded: false,
   maxRepeat: 3, portionMin: 0.5, portionMax: 2, cuisines: [], seeded: false,
   leftovers: true,   // each dinner is cooked once and eaten again as the next day's lunch
+  bigBatches: 0,     // big batches the planner places each week (on top of any picked by hand)
+  batchSize: 4,      // meals a big batch covers: the dinner plus the next meals in a row
   bfRotation: true   // three breakfasts a week: Mon–Tue, Wed–Thu, Fri–Sun (Fri–Sun must be car-friendly)
 };
 const BF_GROUPS = [[0, 1], [2, 3], [4, 5, 6]];
@@ -676,13 +678,58 @@ function linkMode() {
   return { lo: !!S.leftovers && act.includes("lunch") && act.includes("dinner"), bf: !!S.bfRotation && act.includes("breakfast") };
 }
 function bfGroup(d) { return BF_GROUPS.findIndex(g => g.includes(d)); }
+// Lunches and dinners as "runs": one cooking covers a run of meals in a row. The week is a loop of 14 slots
+// (slot 2d = day d's lunch, 2d+1 = its dinner; Sunday's dinner runs into Monday's lunch). By default each dinner
+// also covers the next lunch. A big batch (plan.batch[d] = { k, auto }) makes day d's dinner cover the next k
+// meals in a row: k = 4 is Mon dinner, Tue lunch, Tue dinner, Wed lunch. A lunch left over after an odd-sized
+// batch is cooked fresh on its own.
+function mealRuns(batch) {
+  const act = activeSlots(), on = i => act.includes(i % 2 ? "dinner" : "lunch"), lo = linkMode().lo;
+  const B = lo ? (batch || state.plan.batch || {}) : {};
+  const cover = Array(14).fill(-1), runs = [];
+  const add = (slots, k) => { slots.forEach(i => { cover[i] = runs.length; }); runs.push({ slots, k }); };
+  // Batches picked by hand claim their meals first, then the planner's, each in day order.
+  const order = Object.keys(B).map(Number).sort((a, b) => (!!B[a].auto - !!B[b].auto) || a - b);
+  for (const d of order) {
+    const start = 2 * d + 1, sl = [];
+    if (!on(start) || cover[start] !== -1) continue;
+    for (let j = 0; j < 14 && sl.length < B[d].k; j++) {
+      const i = (start + j) % 14;
+      if (cover[i] !== -1) break;
+      if (on(i)) sl.push(i);
+    }
+    add(sl, B[d].k);
+  }
+  for (let d = 0; d < 7; d++) {
+    const i = 2 * d + 1, n = (i + 1) % 14;
+    if (!on(i) || cover[i] !== -1) continue;
+    add(lo && on(n) && cover[n] === -1 ? [i, n] : [i], 0);
+  }
+  for (let d = 0; d < 7; d++) { const i = 2 * d; if (on(i) && cover[i] === -1) add([i], 0); }
+  return runs.map(r => ({ k: r.k, slots: r.slots.map(i => [Math.floor(i / 2), i % 2 ? "dinner" : "lunch"]) }));
+}
+function runOf(d, s, runs) { return (runs || mealRuns()).find(r => r.slots.some(([x, y]) => x === d && y === s)); }
 // Every slot that must hold the same recipe as [d, s], including itself.
 function linkedSlots(d, s) {
   const L = linkMode();
-  if (s === "dinner" && L.lo) return [[d, "dinner"], [(d + 1) % 7, "lunch"]];
-  if (s === "lunch" && L.lo) return [[(d + 6) % 7, "dinner"], [d, "lunch"]];
   if (s === "breakfast" && L.bf) return BF_GROUPS[bfGroup(d)].map(x => [x, "breakfast"]);
+  if (s === "lunch" || s === "dinner") { const r = runOf(d, s); if (r) return r.slots; }
   return [[d, s]];
+}
+// After a batch size changes: runs that still start where a meal was cooked keep that recipe across their new
+// meals; meals freed from a shrunk batch are cleared so the planner (or you) can fill them.
+function relink(oldRuns) {
+  const P = state.plan.days, oldCook = new Map(oldRuns.map(r => [r.slots[0].join(), r]));
+  for (const r of mealRuns()) {
+    const first = P[r.slots[0][0]].slots[r.slots[0][1]], was = oldCook.get(r.slots[0].join());
+    const src = was && first && state.recipes[first.id] ? first : null;
+    r.slots.forEach(([d, s]) => {
+      const c = P[d].slots[s];
+      if (src) P[d].slots[s] = { id: src.id, x: c && c.id === src.id ? c.x || 1 : 1, locked: !!src.locked };
+      else if (!was) delete P[d].slots[s];
+    });
+  }
+  DAYS.forEach((_, d) => rebalance(d));
 }
 // The slot where a linked meal is cooked (the others are leftovers or repeats of it).
 function isCookSlot(d, s) { const l = linkedSlots(d, s); return l[0][0] === d && l[0][1] === s; }
@@ -700,8 +747,7 @@ function weekVars() {
     if (L.bf) BF_GROUPS.forEach(g => vars.push({ kind: "bf", cook: g[0], slots: g.map(x => [x, "breakfast"]) }));
     else DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, "breakfast"]] }));
   }
-  if (L.lo) DAYS.forEach((_, d) => vars.push({ kind: "din", cook: d, slots: [[d, "dinner"], [(d + 1) % 7, "lunch"]] }));
-  else for (const s of ["lunch", "dinner"]) if (act.includes(s)) DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, s]] }));
+  if (act.includes("lunch") || act.includes("dinner")) mealRuns().forEach(r => vars.push({ kind: r.slots.length > 1 ? "din" : "one", cook: r.slots[0][0], slots: r.slots, k: r.k }));
   for (const s of act.filter(s => !["breakfast", "lunch", "dinner"].includes(s))) DAYS.forEach((_, d) => vars.push({ kind: "snack", cook: d, slots: [[d, s]] }));
   vars.forEach(v => {
     const [d0, s0] = v.slots[0];
@@ -720,7 +766,44 @@ function weekVars() {
 // Variety rules: no recipe cooked twice, at least 2 cuisines (relaxed by "Minimize groceries").
 // "Surprise me" keeps the first two tiers and drops the ingredient tier.
 const TIER = { missing: 2e7, macroDay: 1e6, macroSize: 1e5, repeat: 1e4, cuisine: 1e4, same: 5e3 };
+// Places the week's big batches (keeping ones picked by hand), then fills the plan.
 function generate(mode, days) {
+  const S = state.settings, plan = state.plan;
+  plan.batch = plan.batch || {};
+  if (days.length === 7 && linkMode().lo) {
+    for (const d in plan.batch) if (plan.batch[d].auto) delete plan.batch[d];
+    const n = Math.max(0, Math.min(3, Math.round(+S.bigBatches || 0))), k = +S.batchSize || 4;
+    if (n) {
+      const manual = { ...plan.batch };
+      const usable = DAYS.map((_, d) => d).filter(d => !manual[d] && !(plan.days[d].slots.dinner && plan.days[d].slots.dinner.locked));
+      let bestC = [], bestS = Infinity;
+      for (const c of batchCombos(usable, n, 12)) {
+        plan.batch = { ...manual }; c.forEach(d => { plan.batch[d] = { k, auto: true }; });
+        // Skip placements where a batch would be cut short by another one.
+        const runs = mealRuns();
+        if (c.some(d => { const r = runs.find(x => x.slots[0][0] === d && x.slots[0][1] === "dinner"); return !r || r.slots.length < Math.min(k, 14); })) continue;
+        const sc = fillWeek(mode, days, { dry: true });
+        if (sc < bestS) { bestS = sc; bestC = c; }
+      }
+      plan.batch = { ...manual }; bestC.forEach(d => { plan.batch[d] = { k, auto: true }; });
+    }
+  }
+  return fillWeek(mode, days);
+}
+// Up to max random sets of n days, at least 2 days apart (a 3- or 4-meal batch spans into the next day).
+function batchCombos(days, n, max) {
+  const out = [], rec = (start, acc) => {
+    if (acc.length === n) { out.push(acc.slice()); return; }
+    for (let i = start; i < days.length; i++) {
+      const d = days[i];
+      if (acc.some(x => { const g = Math.abs(x - d); return Math.min(g, 7 - g) < 2; })) continue;
+      acc.push(d); rec(i + 1, acc); acc.pop();
+    }
+  };
+  rec(0, []);
+  return out.sort(() => Math.random() - .5).slice(0, max);
+}
+function fillWeek(mode, days, opts = {}) {
   const act = activeSlots(), vars = weekVars(), inDays = new Set(days), S = state.settings;
   vars.forEach(v => {
     const touches = v.slots.some(([d]) => inDays.has(d));
@@ -776,7 +859,7 @@ function generate(mode, days) {
   };
   let best = vars.map(v => v.val), bestS = Infinity;
   if (free.length) {
-    const restarts = lean ? 4 : 6, iters = lean ? 4000 : 2500;
+    const restarts = opts.dry ? 1 : lean ? 4 : 6, iters = opts.dry ? 1500 : lean ? 4000 : 2500;
     for (let r = 0; r < restarts; r++) {
       const cur = vars.map(v => v.free ? null : v.val);
       for (const i of freeIdx) cur[i] = propose(cur, i);
@@ -792,6 +875,7 @@ function generate(mode, days) {
       if (!lean && bestS < TIER.same) break;
     }
   }
+  if (opts.dry) return bestS;
   // Write the chosen recipes, then portions for every day they touch.
   const touched = new Set(days);
   free.forEach(v => v.slots.forEach(([d]) => touched.add(d)));
@@ -1018,7 +1102,7 @@ function mergeSettings(s) {
 function mergePlan(p) {
   const e = emptyPlan();
   if (!p || !Array.isArray(p.days)) return e;
-  return { days: e.days.map((d, i) => ({ cuisine: (p.days[i] && p.days[i].cuisine) || "", slots: (p.days[i] && p.days[i].slots) || {} })), checked: p.checked || {}, cooked: p.cooked || {} };
+  return { days: e.days.map((d, i) => ({ cuisine: (p.days[i] && p.days[i].cuisine) || "", slots: (p.days[i] && p.days[i].slots) || {} })), checked: p.checked || {}, cooked: p.cooked || {}, batch: p.batch || {} };
 }
 
 /* ---------- accounts and storage ---------- */
@@ -1247,11 +1331,21 @@ function slotCell(d, s) {
   const day = state.plan.days[d], c = day.slots[s], r = c && state.recipes[c.id];
   const label = SLOTS.find(x => x[0] === s)[1];
   const L = linkMode(), on = targetsOn();
-  const ids = s === "lunch" && L.lo ? eligibleIds("dinner", state.plan.days[(d + 6) % 7].cuisine) : slotChoices(d, s);
-  let link = "";
-  if (s === "lunch" && L.lo) link = `Leftovers from ${DAYS[(d + 6) % 7]}'s dinner`;
-  else if (s === "dinner" && L.lo) link = `Makes ${DAYS[(d + 1) % 7]}'s lunch too`;
-  else if (s === "breakfast" && L.bf) {
+  const run = (s === "lunch" || s === "dinner") ? runOf(d, s) : null;
+  const [d0, s0] = run ? run.slots[0] : [d, s];
+  const ids = d0 !== d || s0 !== s ? eligibleIds(s0, state.plan.days[d0].cuisine) : slotChoices(d, s);
+  const mealName = ([x, y]) => `${DAYS[x].slice(0, 3)} ${y}`;
+  let link = "", batchSel = "";
+  if (run && (d0 !== d || s0 !== s)) link = `Leftovers from ${DAYS[d0]}'s ${s0}`;
+  else if (run && run.slots.length > 1) link = run.slots.length === 2 && run.slots[1][1] === "lunch" && run.slots[1][0] === (d + 1) % 7
+    ? `Makes ${DAYS[(d + 1) % 7]}'s lunch too` : `Big batch: also ${run.slots.slice(1).map(mealName).join(", ")}`;
+  else if (run && s === "lunch" && L.lo) link = "Cooked fresh";
+  // How many meals this dinner makes: 2 (dinner + next lunch) by default, or a big batch of 3 or 4.
+  if (run && s === "dinner" && d0 === d && s0 === s && L.lo) {
+    const b = (state.plan.batch || {})[d], k = b ? b.k : 2;
+    batchSel = `<label class="cooked">Makes <select data-batch="${d}" aria-label="${DAYS[d]} dinner makes">${[2, 3, 4].map(n => `<option value="${n}" ${k === n ? "selected" : ""}>${n} meals</option>`).join("")}</select>${b && b.auto ? ` <span class="ctag">planner's pick</span>` : ""}</label>`;
+  }
+  if (s === "breakfast" && L.bf) {
     const g = BF_GROUPS[bfGroup(d)];
     link = `Same breakfast ${DAYS[g[0]].slice(0, 3)}–${DAYS[g[g.length - 1]].slice(0, 3)}${bfGroup(d) === CAR_GROUP ? " · car-friendly" : ""}`;
   }
@@ -1272,7 +1366,7 @@ function slotCell(d, s) {
     <select id="sl-${d}-${s}" data-d="${d}" data-s="${s}" aria-label="${DAYS[d]} ${label}">
       <option value="">— Empty —</option>${opts}
     </select>
-    <div class="slot-meta">${meta}</div>${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${cooked}
+    <div class="slot-meta">${meta}</div>${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${batchSel}${cooked}
   </div>`;
 }
 
@@ -1681,6 +1775,11 @@ function viewTargets() {
         <label><input type="checkbox" data-flag="leftovers" ${S.leftovers ? "checked" : ""} ${dis}> Each dinner is next day's lunch (Sunday's dinner is Monday's lunch)</label>
         <label><input type="checkbox" data-flag="bfRotation" ${S.bfRotation ? "checked" : ""} ${dis}> Three breakfasts a week: Mon–Tue, Wed–Thu, Fri–Sun (Fri–Sun car-friendly)</label>
       </div>
+      <div class="fgrid">
+        <div class="field"><label for="bigb">Big batches per week</label><select id="bigb" data-num="bigBatches" ${S.leftovers ? "" : "disabled"}>${[0, 1, 2, 3].map(n => `<option value="${n}" ${+S.bigBatches === n ? "selected" : ""}>${n === 0 ? "None" : n}</option>`).join("")}</select></div>
+        <div class="field"><label for="bsize">Each big batch makes</label><select id="bsize" data-num="batchSize" ${S.leftovers ? "" : "disabled"}>${[3, 4].map(n => `<option value="${n}" ${+S.batchSize === n ? "selected" : ""}>${n} meals</option>`).join("")}</select></div>
+      </div>
+      <p class="hint">A big batch is a dinner cooked in a larger amount that covers the next meals in a row: 4 meals is that dinner, the next lunch and dinner, and the lunch after. The planner picks which dinners when you plan the week; you can also set any dinner to make 2, 3 or 4 meals on the plan.</p>
       <p class="hint">Mark a recipe "Car-friendly" in its editor to make it eligible for Friday–Sunday breakfasts. Portions can still differ between the two meals so each day stays on target.</p>
     </section></div>
     <div class="grid2" style="margin-top:16px">${PRIVACY}
@@ -1860,6 +1959,7 @@ document.addEventListener("change", e => {
   const S = state.settings;
   if (t.matches("[data-target]")) { const v = parseFloat(t.value); if (v >= 0) { S.targets[t.dataset.target] = v; saveSettings(); render(); } return; }
   if (t.matches("[data-tol]")) { const v = parseFloat(t.value); if (v > 0) { S.tol[t.dataset.tol] = v; saveSettings(); render(); } return; }
+  if (t.matches("select[data-num]")) { S[t.dataset.num] = +t.value; saveSettings(); toast("Saved. Plan the week to apply it."); return render(); }
   if (t.matches("[data-flag]")) { S[t.dataset.flag] = t.checked; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
   if (t.id === "ob-targets") { document.getElementById("ob-tfields").hidden = !t.checked; return; }
   // Naming an ingredient picks its store section, unless the section was chosen by hand.
@@ -1869,6 +1969,16 @@ document.addEventListener("change", e => {
     return;
   }
   if (t.matches("#ing-body [data-f=category]")) { t.dataset.touched = "1"; return; }
+  if (t.matches("select[data-batch]")) {
+    const d = +t.dataset.batch, k = +t.value, old = mealRuns();
+    state.plan.batch = state.plan.batch || {};
+    if (k <= 2) delete state.plan.batch[d]; else state.plan.batch[d] = { k, auto: false };
+    relink(old);
+    const r = runOf(d, "dinner");
+    if (k > 2 && r && r.slots.length < k) toast(`Only ${r.slots.length} meals were free in a row after ${DAYS[d]}'s dinner.`);
+    else if (k > 2) toast(`${DAYS[d]}'s dinner now covers ${k} meals. Fill any empty meals, or regenerate.`);
+    savePlan(); return render();
+  }
   if (t.matches("[data-cooked]")) {
     state.plan.cooked = state.plan.cooked || {};
     if (t.checked) state.plan.cooked[t.dataset.cooked] = { at: new Date().toISOString() }; else delete state.plan.cooked[t.dataset.cooked];
