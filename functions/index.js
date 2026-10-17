@@ -29,6 +29,8 @@ const RECIPE_SCHEMA = {
           protein: { type: "number", description: "Grams per serving" },
           carbs: { type: "number", description: "Grams per serving" },
           fat: { type: "number", description: "Grams per serving" },
+          fiber: { type: "number", description: "Grams of dietary fiber per serving" },
+          fiberEstimated: { type: "boolean", description: "true unless the source printed fiber" },
           macrosEstimated: { type: "boolean", description: "true unless the source printed all four numbers" },
           ingredients: {
             type: "array",
@@ -47,7 +49,7 @@ const RECIPE_SCHEMA = {
           },
           steps: { type: "array", items: { type: "string" } }
         },
-        required: ["name", "cuisine", "meals", "servings", "calories", "protein", "carbs", "fat", "macrosEstimated", "ingredients", "steps"]
+        required: ["name", "cuisine", "meals", "servings", "calories", "protein", "carbs", "fat", "fiber", "fiberEstimated", "macrosEstimated", "ingredients", "steps"]
       }
     },
     problem: { type: "string", description: "If no recipe could be read, say why in one short sentence" }
@@ -61,7 +63,7 @@ function instructions(known) {
 - Split every ingredient line into item, qty, unit and prep. Pantry items listed separately (oil, butter, salt, pepper, sugar) are ingredients too.
 - For item, reuse one of the person's existing ingredient names when it is the same thing, so grocery lists merge. Existing names: ${known.length ? known.join(", ") : "(none yet)"}.
 - category is the store section where the item is bought.
-- Macros are per serving. If the source prints calories but not protein, carbs and fat, keep its calories and estimate the rest. If it prints nothing, estimate all four from the ingredients. Set macrosEstimated true whenever any number is your estimate.
+- Macros are per serving. If the source prints calories but not protein, carbs and fat, keep its calories and estimate the rest. If it prints nothing, estimate all four from the ingredients. Set macrosEstimated true whenever any number is your estimate. Fiber (grams per serving) works the same way: use the printed value, otherwise estimate it from the ingredients and set fiberEstimated true.
 - meals: the meal types the dish suits.
 - steps: short imperative sentences in order, without step numbers.
 - Never invent a recipe that is not in the material. If there is none, return an empty list and explain in problem.`;

@@ -132,7 +132,7 @@ nav.tabs .count { font-family: var(--font-data); font-size: 12px; color: var(--m
 .slot-meta b { color: var(--ink); font-weight: 500; }
 .slot-link { font-size: 11.5px; color: var(--accent); margin-top: 2px; }
 
-.meters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 14px; }
 .meter { display: grid; gap: 4px; min-width: 0; }
 .meter-top { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; }
 .meter-top .num { font-size: 12px; }
@@ -369,6 +369,7 @@ const DEFAULT_SETTINGS = {
   useTargets: false, // calorie and macro targets are optional
   targets: { cal: 2000, p: 150, c: 200, f: 67 },
   tol: { cal: 10, p: 10, c: 10, f: 10 },
+  fiber: 0,          // daily fiber goal in grams, a minimum (0 = no goal); works with or without macro targets
   slots: { breakfast: true, lunch: true, dinner: true, snack: true },
   household: 1,      // people cooked for; scales recipe amounts and the grocery list
   minimize: false,   // "Minimize groceries": relax the 2-cuisine rule to cut ingredients
@@ -536,7 +537,9 @@ function normalizeRecipe(raw, opts = {}) {
   if (isNaN(f)) f = parseFloat(pick(mac, ["fat","f"]));
   if ([p,c,f].some(isNaN)) throw new Error("missing protein, carbs or fat");
   if (isNaN(cal)) cal = p*4 + c*4 + f*9;
-  if (opts.totals) { cal /= servings; p /= servings; c /= servings; f /= servings; }
+  let fb = n(["fiber","fibre","fib","dietary_fiber"]);
+  if (isNaN(fb)) fb = parseFloat(pick(mac, ["fiber","fibre"]));
+  if (opts.totals) { cal /= servings; p /= servings; c /= servings; f /= servings; if (!isNaN(fb)) fb /= servings; }
   let ings = raw.ingredients || [];
   if (typeof ings === "string") ings = ings.split(/\n+/);
   ings = ings.map(i => {
@@ -558,6 +561,7 @@ function normalizeRecipe(raw, opts = {}) {
     cuisine: String(pick(raw, ["cuisine","category","style"]) || "Other").trim().replace(/^\w/, ch => ch.toUpperCase()),
     meals: normMeals(pick(raw, ["meals","meal","mealType","meal_type","type","course"])),
     servings, cal: Math.round(cal), p: +p.toFixed(1), c: +c.toFixed(1), f: +f.toFixed(1),
+    ...(isNaN(fb) ? {} : { fib: +fb.toFixed(1), fibEstimated: raw.fibEstimated != null ? !!raw.fibEstimated : raw.fiberEstimated != null ? !!raw.fiberEstimated : !!raw.macrosEstimated }),
     ingredients: ings, steps, example: !!raw.example,
     // Macros are estimates unless the source supplied them; older records say so in their source text.
     estimated: raw.estimated != null ? !!raw.estimated : raw.macrosEstimated != null ? !!raw.macrosEstimated : /estimat/i.test(String(raw.source || "")),
@@ -628,6 +632,11 @@ function recipeItems(r) {
 }
 function haveSet() { return new Set(state.settings.have || []); }
 function targetsOn() { const S = state.settings; return !!S.useTargets && ["cal","p","c","f"].some(k => S.targets[k] > 0); }
+function fiberGoal() { return Math.max(0, +state.settings.fiber || 0); }
+function fiberOn() { return fiberGoal() > 0; }
+// Any daily goal at all (macro targets or the fiber minimum): these come first when planning.
+function goalsOn() { return targetsOn() || fiberOn(); }
+function fib(r) { return +r.fib || 0; }
 function eligibleIds(slot, dayCuisine) {
   const all = Object.values(state.recipes).filter(r => r.meals.includes(slot));
   const g = state.settings.cuisines;
@@ -644,23 +653,30 @@ function portionSteps() {
 
 /* ---------- portion solver ---------- */
 // Picks a serving multiplier per meal so the day lands inside every macro tolerance band.
+// Picks a serving multiplier per meal so the day lands inside every macro tolerance band and reaches the fiber minimum.
 function solve(recs) {
-  const S = state.settings;
-  // With no targets set the plan ignores macros: everyone eats one serving.
-  if (!targetsOn()) return { x: recs.map(() => 1), err: 0, tot: [0, 0, 0, 0], dev: [0, 0, 0, 0], feasible: true };
+  const S = state.settings, mOn = targetsOn(), F = fiberGoal();
+  const fibTot = x => recs.reduce((a, r, i) => a + fib(r) * x[i], 0);
+  // Fiber is a minimum: short of it counts against the day, over it never does. Half a gram of rounding is allowed.
+  const fibShort = t => F > 0 ? Math.max(0, F - 0.5 - t) / F : 0;
+  if (!mOn) {
+    const x = recs.map(() => 1), t = fibTot(x), sh = fibShort(t);
+    return { x, err: 0, tot: [0, 0, 0, 0, t], dev: [0, 0, 0, 0, sh], miss: sh * 10, feasible: sh === 0 };
+  }
   const T = [S.targets.cal, S.targets.p, S.targets.c, S.targets.f];
   const TL = [S.tol.cal, S.tol.p, S.tol.c, S.tol.f].map(v => Math.max(v, 1) / 100);
   const W = [1.5, 1.2, 1, 1];
-  const M = recs.map(r => [r.cal, r.p, r.c, r.f]);
+  const M = recs.map(r => [r.cal, r.p, r.c, r.f, fib(r)]);
   const P = portionSteps(), n = recs.length;
   const sumCal = M.reduce((a, m) => a + m[0], 0) || 1;
   const nearest = v => P.reduce((b, p) => Math.abs(p - v) < Math.abs(b - v) ? p : b, P[0]);
   const x = Array(n).fill(nearest(T[0] / sumCal));
-  const tot = [0, 0, 0, 0];
-  for (let i = 0; i < n; i++) for (let k = 0; k < 4; k++) tot[k] += x[i] * M[i][k];
+  const tot = [0, 0, 0, 0, 0];
+  for (let i = 0; i < n; i++) for (let k = 0; k < 5; k++) tot[k] += x[i] * M[i][k];
   const err = () => {
     let e = 0;
     for (let k = 0; k < 4; k++) { if (T[k] > 0) { const d = (tot[k] - T[k]) / (T[k] * TL[k]); e += W[k] * d * d; } }
+    if (F > 0) { const d = fibShort(tot[4]) / 0.1; e += 1.2 * d * d; }
     for (let i = 0; i < n; i++) e += 0.04 * (x[i] - 1) * (x[i] - 1);
     return e;
   };
@@ -671,19 +687,21 @@ function solve(recs) {
       const cur = x[i]; let bv = cur;
       for (const v of P) {
         if (v === cur) continue;
-        for (let k = 0; k < 4; k++) tot[k] += (v - x[i]) * M[i][k];
+        for (let k = 0; k < 5; k++) tot[k] += (v - x[i]) * M[i][k];
         x[i] = v;
         const e = err();
         if (e < best - 1e-9) { best = e; bv = v; }
       }
-      for (let k = 0; k < 4; k++) tot[k] += (bv - x[i]) * M[i][k];
+      for (let k = 0; k < 5; k++) tot[k] += (bv - x[i]) * M[i][k];
       x[i] = bv;
       if (bv !== cur) changed = true;
     }
     if (!changed) break;
   }
-  const dev = tot.map((t, k) => T[k] > 0 ? (t - T[k]) / (T[k] * TL[k]) : 0);
-  return { x: x.slice(), err: best, tot, dev, feasible: dev.every(d => Math.abs(d) <= 1) };
+  const dev = tot.slice(0, 4).map((t, k) => T[k] > 0 ? (t - T[k]) / (T[k] * TL[k]) : 0);
+  const sh = fibShort(tot[4]); dev.push(sh);
+  const miss = dev.slice(0, 4).reduce((a, d) => a + Math.max(0, Math.abs(d) - 1), 0) + sh * 10;
+  return { x: x.slice(), err: best, tot, dev, miss, feasible: dev.slice(0, 4).every(d => Math.abs(d) <= 1) && sh === 0 };
 }
 
 /* ---------- linked meals (leftovers + breakfast rotation) ---------- */
@@ -837,7 +855,7 @@ function fillWeek(mode, days, opts = {}) {
     if (!memo.has(k)) memo.set(k, solve(ids.map(id => state.recipes[id])));
     return memo.get(k);
   };
-  const lean = mode !== "random", withTargets = targetsOn(), have = haveSet();
+  const lean = mode !== "random", withTargets = goalsOn(), have = haveSet();
   const cuisineRule = !S.minimize && new Set(vars.filter(v => v.kind !== "snack").flatMap(v => v.cands.map(id => state.recipes[id].cuisine))).size >= 2;
   const score = vals => {
     let sc = 0;
@@ -846,7 +864,7 @@ function fillWeek(mode, days, opts = {}) {
       if (!s) { sc += TIER.missing; continue; }
       if (withTargets) {
         if (!s.feasible) sc += TIER.macroDay;
-        sc += TIER.macroSize * s.dev.reduce((a, x) => a + Math.max(0, Math.abs(x) - 1), 0) + 0.01 * s.err;
+        sc += TIER.macroSize * s.miss + 0.01 * s.err;
       }
     }
     const cooked = new Map(), snacks = new Map(), cuis = new Set(), items = new Set();
@@ -873,7 +891,9 @@ function fillWeek(mode, days, opts = {}) {
   };
   let best = vars.map(v => v.val), bestS = Infinity;
   if (free.length) {
-    const restarts = opts.dry ? 1 : lean ? 4 : 6, iters = opts.dry ? 1500 : lean ? 4000 : 2500;
+    // Tight goals (narrow bands, a fiber minimum) need a longer search to find a week where every day fits.
+    const hard = withTargets && (fiberOn() || Math.min(...Object.values(S.tol)) < 5);
+    const restarts = opts.dry ? 1 : lean ? (hard ? 6 : 4) : 6, iters = opts.dry ? 1500 : (hard ? 9000 : lean ? 4000 : 2500);
     for (let r = 0; r < restarts; r++) {
       const cur = vars.map(v => v.free ? null : v.val);
       for (const i of freeIdx) cur[i] = propose(cur, i);
@@ -928,7 +948,10 @@ function dayMiss(d) {
   const st = dayStatus(d), S = state.settings;
   const names = { cal: "calories", p: "protein", c: "carbs", f: "fat" };
   const worst = ["cal","p","c","f"].filter(k => Math.abs(st.dev[k]) * 100 > S.tol[k] + 1e-9).sort((a, b) => Math.abs(st.dev[b]) - Math.abs(st.dev[a]))[0];
-  if (!worst) return null;
+  if (!worst) {
+    if (st.fibShort) return { k: "fib", name: "fiber", text: `fiber under by ${Math.round(fiberGoal() - st.tot.fib)} g` };
+    return null;
+  }
   const diff = Math.round(st.tot[worst] - S.targets[worst]);
   return { k: worst, name: names[worst], text: `${names[worst]} ${diff > 0 ? "over" : "under"} by ${Math.abs(diff)}${worst === "cal" ? " kcal" : " g"} (${Math.abs(Math.round(st.dev[worst] * 100))}%)` };
 }
@@ -941,12 +964,13 @@ function rebalance(d) {
 }
 function dayStatus(d) {
   const day = state.plan.days[d], act = activeSlots(), S = state.settings;
-  const tot = { cal: 0, p: 0, c: 0, f: 0 }; let filled = 0;
+  const tot = { cal: 0, p: 0, c: 0, f: 0, fib: 0 }; let filled = 0;
   for (const s of act) {
     const c = day.slots[s], r = c && state.recipes[c.id];
     if (!r) continue;
     filled++;
     for (const k of ["cal","p","c","f"]) tot[k] += r[k] * (c.x || 1);
+    tot.fib += fib(r) * (c.x || 1);
   }
   const dev = {}; let feasible = true;
   const on = targetsOn();
@@ -954,7 +978,9 @@ function dayStatus(d) {
     const t = S.targets[k]; dev[k] = on && t > 0 ? (tot[k] - t) / t : 0;
     if (Math.abs(dev[k]) * 100 > S.tol[k] + 1e-9) feasible = false;
   }
-  return { tot, dev, filled, need: act.length, complete: filled === act.length && act.length > 0, feasible };
+  const fibShort = fiberOn() && tot.fib < fiberGoal() - 0.5;
+  if (fibShort) feasible = false;
+  return { tot, dev, fibShort, filled, need: act.length, complete: filled === act.length && act.length > 0, feasible };
 }
 function household() { return Math.max(1, Math.round(+state.settings.household || 1)); }
 
@@ -1295,12 +1321,14 @@ function renderChrome() {
   const S = state.settings, T = S.targets, signedOut = state.mode === "signin" || state.mode === "loading";
   const facts = document.getElementById("facts");
   facts.hidden = signedOut;
-  facts.innerHTML = targetsOn() ? `
+  const fibFact = fiberOn() ? `<div class="f"><span class="v">${fiberGoal()}g+</span><span class="k">Fiber</span></div>` : "";
+  facts.style.gridTemplateColumns = `repeat(${(targetsOn() ? 4 : 0) + (fiberOn() ? 1 : 0) || 1}, auto)`;
+  facts.innerHTML = !targetsOn() && fiberOn() ? `<div class="ft"><span>Daily goal</span><button data-action="goto" data-tab="targets">Edit</button></div>${fibFact}` : targetsOn() ? `
     <div class="ft"><span>Daily target</span><button data-action="goto" data-tab="targets">Edit</button></div>
     <div class="f"><span class="v">${T.cal.toLocaleString()}</span><span class="k">kcal</span></div>
     <div class="f"><span class="v">${T.p}g</span><span class="k">${macroDot("--protein")}Protein</span></div>
     <div class="f"><span class="v">${T.c}g</span><span class="k">${macroDot("--carb")}Carbs</span></div>
-    <div class="f"><span class="v">${T.f}g</span><span class="k">${macroDot("--fat")}Fat</span></div>`
+    <div class="f"><span class="v">${T.f}g</span><span class="k">${macroDot("--fat")}Fat</span></div>${fibFact}`
     : `<div class="ft" style="border-bottom-width:2px"><span>No macro targets</span><button data-action="goto" data-tab="targets">Set targets</button></div><div class="f" style="grid-column:1/-1"><span class="k">Cooking for ${household()} · targets are optional</span></div>`;
   document.getElementById("account").innerHTML = state.user
     ? `<span>${esc(state.user.email || state.user.name)}</span><button class="btn ghost small" data-action="sign-out">Sign out</button>` : "";
@@ -1343,6 +1371,7 @@ function viewOnboarding() {
     <div class="fgrid" id="ob-tfields" ${S.useTargets ? "" : "hidden"}>
       ${MACROS.map(([k, l, u]) => `<div class="field"><label for="ob-${k}">${l} (${u})</label><input id="ob-${k}" type="number" min="0" value="${T[k]}"></div>`).join("")}
     </div>
+    <div class="field" style="max-width:260px"><label for="ob-fiber">Daily fiber goal in grams (optional)</label><input id="ob-fiber" type="number" min="0" max="100" value="${fiberGoal() || ""}" placeholder="No fiber goal"></div>
     <div class="row"><button class="btn primary" data-action="finish-onboarding">Continue to add recipes</button></div>
   </section>`;
 }
@@ -1362,7 +1391,7 @@ function viewPlan() {
       <div class="progress" role="img" aria-label="${n} of ${MIN_RECIPES} recipes"><span style="width:${Math.min(100, n / MIN_RECIPES * 100)}%"></span></div>
       <div class="row"><button class="btn primary" data-action="goto-import">Import recipes</button><button class="btn" data-action="goto-new">Add one by hand</button></div></section>`;
   }
-  const S = state.settings, cs = cuisines(), ws = weekSummary(), on = targetsOn();
+  const S = state.settings, cs = cuisines(), ws = weekSummary(), on = goalsOn();
   const chips = [`<button class="chip" data-action="cuisine-all" aria-pressed="${!S.cuisines.length}">All cuisines</button>`]
     .concat(cs.map(c => `<button class="chip" data-action="cuisine" data-c="${esc(c)}" aria-pressed="${S.cuisines.includes(c)}">${esc(c)}</button>`)).join("");
   const days = state.plan.days.map((_, d) => dayCard(d)).join("");
@@ -1388,13 +1417,13 @@ function viewPlan() {
       <button class="btn ghost small" data-action="clear-unlocked">Clear unpinned</button>
       <button class="btn ghost small" data-action="clear-all">Clear all</button>
     </div>
-    <p class="hint">No recipe is cooked twice, and the week mixes at least 2 cuisines${S.minimize ? " (relaxed while Minimize groceries is on)" : ""}.${on ? " Macro targets come first, then variety, then the shortest list." : " Among varied weeks, the planner picks the one with the fewest unique ingredients."}${L.lo ? " Each dinner comes back as the next day's lunch." : ""}${L.bf ? ` Breakfast repeats ${bfGroups().map(bfLabel).join(", ").replace(/, ([^,]*)$/, " and $1")}, with car-friendly picks for Fri–Sun.` : ""} Pick a meal yourself and it gets pinned.</p>
+    <p class="hint">No recipe is cooked twice, and the week mixes at least 2 cuisines${S.minimize ? " (relaxed while Minimize groceries is on)" : ""}.${on ? ` ${targetsOn() && fiberOn() ? "Macro targets and your fiber minimum come" : targetsOn() ? "Macro targets come" : "Your fiber minimum comes"} first, then variety, then the shortest list.` : " Among varied weeks, the planner picks the one with the fewest unique ingredients."}${L.lo ? " Each dinner comes back as the next day's lunch." : ""}${L.bf ? ` Breakfast repeats ${bfGroups().map(bfLabel).join(", ").replace(/, ([^,]*)$/, " and $1")}, with car-friendly picks for Fri–Sun.` : ""} Pick a meal yourself and it gets pinned.</p>
   </section>
   <div class="week">${days}</div>`;
 }
 
 function dayCard(d) {
-  const day = state.plan.days[d], st = dayStatus(d), S = state.settings, act = activeSlots(), on = targetsOn();
+  const day = state.plan.days[d], st = dayStatus(d), S = state.settings, act = activeSlots(), on = goalsOn();
   const cs = cuisines();
   let pill;
   if (st.complete && !on) pill = `<span class="pill ok">Planned</span>`;
@@ -1402,7 +1431,17 @@ function dayCard(d) {
   else if (st.complete) pill = `<span class="pill warn">${esc(dayMiss(d).text.replace(/^\w/, ch => ch.toUpperCase()))}</span>`;
   else pill = `<span class="pill">${st.filled} of ${st.need} picked</span>`;
   const slots = act.map(s => slotCell(d, s)).join("");
-  const meters = !on ? "" : MACROS.map(([k, label, unit, color]) => {
+  const fibMeter = !fiberOn() ? "" : (() => {
+    const t = fiberGoal(), v = st.tot.fib, scale = 1.6, pct = x => Math.max(0, Math.min(100, x / scale * 100));
+    return `<div class="meter ${st.complete && st.fibShort ? "off" : ""}">
+      <div class="meter-top"><span>Fiber</span><span class="num">${Math.round(v)}<span class="muted">/${t}g+</span></span></div>
+      <div class="bar" role="img" aria-label="Fiber ${Math.round(v)} of at least ${t} g">
+        <span class="band" style="left:${pct(1)}%;width:${100 - pct(1)}%"></span>
+        <span class="fill" style="width:${pct(v / t)}%;background:var(--ok)"></span>
+        <span class="tick" style="left:calc(${pct(1)}% - 1px)"></span>
+      </div></div>`;
+  })();
+  const meters = (!targetsOn() ? "" : MACROS.map(([k, label, unit, color]) => {
     const t = S.targets[k], v = st.tot[k], tol = S.tol[k] / 100, scale = 1.3;
     const pct = x => Math.max(0, Math.min(100, x / scale * 100));
     const off = st.complete && Math.abs(st.dev[k]) > tol + 1e-9;
@@ -1413,7 +1452,7 @@ function dayCard(d) {
         <span class="fill" style="width:${t ? pct(v / t) : 0}%;background:var(${color})"></span>
         <span class="tick" style="left:calc(${pct(1)}% - 1px)"></span>
       </div></div>`;
-  }).join("");
+  }).join("")) + fibMeter;
   const action = on && st.complete && !st.feasible ? `<button class="btn small" data-action="fix-day" data-d="${d}">Rebalance day</button>`
     : !st.complete ? `<button class="btn small" data-action="fill-day" data-d="${d}">Fill the rest</button>` : `<button class="btn ghost small" data-action="reroll-day" data-d="${d}">Reroll</button>`;
   return `<article class="day">
@@ -1433,7 +1472,7 @@ function dayCard(d) {
 function slotCell(d, s) {
   const day = state.plan.days[d], c = day.slots[s], r = c && state.recipes[c.id];
   const label = SLOTS.find(x => x[0] === s)[1];
-  const L = linkMode(), on = targetsOn();
+  const L = linkMode(), on = goalsOn();
   const run = (s === "lunch" || s === "dinner") ? runOf(d, s) : null;
   const [d0, s0] = run ? run.slots[0] : [d, s];
   const ids = d0 !== d || s0 !== s ? eligibleIds(s0, state.plan.days[d0].cuisine) : slotChoices(d, s);
@@ -1457,7 +1496,7 @@ function slotCell(d, s) {
   ids.forEach(id => { const x = state.recipes[id]; (byC[x.cuisine] = byC[x.cuisine] || []).push(x); });
   const opts = Object.keys(byC).sort().map(cu => `<optgroup label="${esc(cu)}">${byC[cu].sort((a, b) => a.name.localeCompare(b.name)).map(x => `<option value="${esc(x.id)}" ${r && r.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup>`).join("");
   const x = c ? c.x || 1 : 1;
-  const meta = r ? (on ? `<b>×${x}</b> serving · ${Math.round(r.cal * x)} kcal · ${Math.round(r.p * x)}P ${Math.round(r.c * x)}C ${Math.round(r.f * x)}F${r.estimated ? ` <span class="est" title="Macros are estimates">est.</span>` : ""}` : `${esc(r.cuisine)}`)
+  const meta = r ? (on ? `<b>×${x}</b> serving · ${Math.round(r.cal * x)} kcal · ${Math.round(r.p * x)}P ${Math.round(r.c * x)}C ${Math.round(r.f * x)}F${r.fib != null ? ` ${Math.round(r.fib * x)}Fb` : ""}${r.estimated || r.fibEstimated ? ` <span class="est" title="Macros are estimates">est.</span>` : ""}` : `${esc(r.cuisine)}`)
     : (c && !r ? "Recipe was deleted" : "Choose a meal");
   // Cooking signal (share of plan cooked) and a 1–5 rating, on the slot where the meal is cooked.
   const key = `${d}-${s}`, ck = (state.plan.cooked || {})[key];
@@ -1519,7 +1558,7 @@ function macroSummary(r, mult, hi, note) {
   const m = mult || 1, n = v => +(v * m).toFixed(1);
   const part = (k, label) => `<span class="${hi === k ? "hl" : ""}"><span class="lbl">${label}:</span> ${n(r[k])}g</span>`;
   return `<div class="msum">${note ? `<span class="per">${note}</span>` : ""}<span class="kcal ${hi === "cal" ? "hl" : ""}">${Math.round(r.cal * m)} kcal</span>
-    <span class="mline">${part("p", "Protein")}<span class="sep">|</span>${part("c", "Carbs")}<span class="sep">|</span>${part("f", "Fat")}</span></div>`;
+    <span class="mline">${part("p", "Protein")}<span class="sep">|</span>${part("c", "Carbs")}<span class="sep">|</span>${part("f", "Fat")}${r.fib != null ? `<span class="sep">|</span><span class="${hi === "fib" ? "hl" : ""}"><span class="lbl">Fiber:</span> ${n(r.fib)}g</span>` : ""}</span></div>`;
 }
 
 function viewRecipes() {
@@ -1533,13 +1572,14 @@ function viewRecipes() {
     density: ["Most protein per calorie", (a, b) => b.p / (b.cal || 1) - a.p / (a.cal || 1)],
     cal: ["Fewest calories", (a, b) => a.cal - b.cal],
     carbs: ["Fewest carbs", (a, b) => a.c - b.c],
-    fat: ["Least fat", (a, b) => a.f - b.f]
+    fat: ["Least fat", (a, b) => a.f - b.f],
+    fiber: ["Most fiber", (a, b) => fib(b) - fib(a)]
   };
   const sort = SORTS[state.rsort] ? state.rsort : "cuisine";
   const list = all.filter(r => (!state.rcuisine || r.cuisine === state.rcuisine) && (!q || r.name.toLowerCase().includes(q) || r.ingredients.some(i => i.item.includes(q))))
     .sort((a, b) => SORTS[sort][1](a, b) || a.name.localeCompare(b.name));
   const exCount = all.filter(r => r.example).length;
-  const hi = { protein: "p", density: "p", cal: "cal", carbs: "c", fat: "f" }[sort];
+  const hi = { protein: "p", density: "p", cal: "cal", carbs: "c", fat: "f", fiber: "fib" }[sort];
   const rows = list.map(r => {
     const pc = r.p * 4, cc = r.c * 4, fc = r.f * 9, tot = (pc + cc + fc) || 1;
     const split = `<div class="split" title="Share of calories: protein ${Math.round(pc / tot * 100)}%, carbs ${Math.round(cc / tot * 100)}%, fat ${Math.round(fc / tot * 100)}%"><span style="width:${pc / tot * 100}%;background:var(--protein)"></span><span style="width:${cc / tot * 100}%;background:var(--carb)"></span><span style="width:${fc / tot * 100}%;background:var(--fat)"></span></div>`;
@@ -1610,8 +1650,9 @@ function editorPanel() {
         <div class="field"><label for="f-p">Protein (g)</label><input id="f-p" type="number" min="0" step="0.1" required value="${r.p}"></div>
         <div class="field"><label for="f-c">Carbs (g)</label><input id="f-c" type="number" min="0" step="0.1" required value="${r.c}"></div>
         <div class="field"><label for="f-f">Fat (g)</label><input id="f-f" type="number" min="0" step="0.1" required value="${r.f}"></div>
+        <div class="field"><label for="f-fib">Fiber (g)</label><input id="f-fib" type="number" min="0" step="0.1" value="${r.fib ?? ""}" placeholder="unknown"></div>
       </div>
-      <label class="toggle" style="font-weight:500"><input type="checkbox" id="f-est" ${r.estimated ? "checked" : ""}> These macros are estimates, not from the recipe source</label>
+      <label class="toggle" style="font-weight:500"><input type="checkbox" id="f-est" ${r.estimated ? "checked" : ""}> These macros and fiber are estimates, not from the recipe source</label>
       <div class="field"><span class="label">Ingredients for the whole recipe</span>
         <div class="ing-wrap"><table class="ing-table"><thead><tr><th>Amount</th><th>Unit</th><th>Ingredient</th><th>Prep note</th><th>Store section</th><th></th></tr></thead><tbody id="ing-body">${rows}</tbody></table></div>
         <datalist id="ing-list">${knownIngredients().map(n => `<option value="${esc(n)}">`).join("")}</datalist>
@@ -1850,6 +1891,8 @@ function viewTargets() {
       <h2>Daily targets</h2>
       <label class="toggle"><input type="checkbox" data-flag="useTargets" ${S.useTargets ? "checked" : ""}> Plan toward daily calorie and macro targets</label>
       <p class="hint">Optional. With targets on, they come first: each day lands within your tolerance, then variety, then the shortest grocery list. With them off, the plan ignores macros.</p>
+      <div class="field" style="max-width:260px"><label for="fiber-goal">Daily fiber goal (g, at least)</label><input id="fiber-goal" type="number" min="0" max="100" step="1" data-setting0="fiber" value="${fiberGoal() || ""}" placeholder="No fiber goal"></div>
+      <p class="hint">A minimum: each day should reach it, and more is fine. Works with or without macro targets, and ranks with them when planning. Adults are often advised 25–38 g. Leave blank for no goal.</p>
       <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px" ${S.useTargets ? "" : "disabled"}>
       <div class="fgrid">
         ${MACROS.map(([k, l, u]) => `<div class="field"><label for="t-${k}">${l} (${u})</label><input id="t-${k}" type="number" min="0" data-target="${k}" value="${t[k]}" ${dis}></div>`).join("")}
@@ -1944,6 +1987,7 @@ document.addEventListener("click", async e => {
       S.household = h;
       S.useTargets = document.getElementById("ob-targets").checked;
       if (S.useTargets) for (const [k] of MACROS) { const v = parseFloat(document.getElementById("ob-" + k).value); if (v >= 0) S.targets[k] = v; }
+      { const fv = parseFloat(document.getElementById("ob-fiber").value); S.fiber = fv > 0 ? Math.round(fv) : 0; }
       S.onboarded = true; saveSettings();
       state.tab = "recipes"; state.importing = true; return render();
     }
@@ -2109,6 +2153,7 @@ document.addEventListener("change", e => {
     return;
   }
   if (t.matches("[data-mslot]")) { S.slots[t.dataset.mslot] = t.checked; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
+  if (t.matches("[data-setting0]")) { const v = parseFloat(t.value); S[t.dataset.setting0] = v > 0 ? Math.round(v) : 0; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
   if (t.matches("[data-setting]")) {
     const v = parseFloat(t.value); if (!(v > 0)) return;
     S[t.dataset.setting] = t.dataset.setting === "household" ? Math.round(v) : v;
@@ -2146,7 +2191,8 @@ document.addEventListener("submit", async e => {
     const r = normalizeRecipe({
       id: existing ? existing.id : undefined,
       name: val("f-name"), cuisine: val("f-cuisine") || "Other", meals: meals.length ? meals : ["lunch","dinner"],
-      servings: val("f-serv"), calories: val("f-cal"), protein: val("f-p"), carbs: val("f-c"), fat: val("f-f"),
+      servings: val("f-serv"), calories: val("f-cal"), protein: val("f-p"), carbs: val("f-c"), fat: val("f-f"), fiber: val("f-fib"),
+      fibEstimated: document.getElementById("f-est").checked,
       ingredients, steps: val("f-steps").split("\n").filter(l => l.trim()),
       estimated: document.getElementById("f-est").checked,
       example: existing ? existing.example : false,

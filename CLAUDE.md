@@ -15,6 +15,7 @@ Product requirements: the Meal Planner PRD (https://claude.ai/artifact/9BXoW42Dy
 ## How the week is planned
 
 - **Rules, in priority order (PRD):** macro targets when set (each day within its tolerance; ±10% by default, Nora uses ±3%), then variety (no recipe cooked twice in the week, at least 2 cuisines unless "Minimize groceries" is on), then the fewest unique ingredients. Items marked "I already have this" (`settings.have`) don't count. Snacks aren't cooked, so they may repeat up to `maxRepeat` days but not reuse a cooked meal. Targets are optional (`useTargets`); without them everyone eats one serving.
+- **Fiber goal:** `settings.fiber` is a daily minimum in grams (0 = off), independent of `useTargets` but ranked with the macro targets when planning; a day is short when it is more than 0.5 g under. Recipes carry `fib` (grams per serving) and `fibEstimated`; all 285 existing recipes got Claude estimates on Oct 16, 2026, and imports extract or estimate fiber.
 - **Household size** (`household`) scales recipe amounts and the grocery list; macros stay per person.
 - **Purchase units:** the grocery list converts produce and eggs sold by the piece into what you buy (400 g onion -> 3 onions), using the `PURCHASE` table of average piece weights and grams per cup; it rounds up, ignoring a remainder under 0.15, and shows the recipe amounts underneath. Prepared forms (powder, paste, canned, frozen...) and items sold by weight stay as they are.
 - **15-recipe minimum** before the first plan (`MIN_RECIPES`).
