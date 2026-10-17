@@ -235,6 +235,7 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .ilist li { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .ilist .q { font-family: var(--font-data); font-size: 13px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ilist .neg { color: var(--muted); }
+.ilist .src { margin-left: 8px; font-family: var(--font-data); font-size: 12px; color: var(--muted); opacity: .8; white-space: nowrap; }
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 12px; }
 .steps li { counter-increment: s; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; line-height: 1.55; max-width: 68ch; }
 .steps li::before { content: counter(s); font-family: var(--font-display); font-weight: 800; font-size: 15px; width: 26px; height: 26px; border-radius: 50%; background: var(--soft); color: var(--accent); display: grid; place-items: center; }
@@ -547,7 +548,7 @@ function normalizeRecipe(raw, opts = {}) {
     const item = String(pick(i, ["item","name","ingredient","food"]) || "").trim().toLowerCase();
     if (!item) return null;
     const q = pick(i, ["qty","quantity","amount"]);
-    const extra = { ...(i.prep ? { prep: String(i.prep).trim() } : {}), ...(i.line ? { line: String(i.line) } : {}) };
+    const extra = { ...(i.prep ? { prep: String(i.prep).trim() } : {}), ...(i.line ? { line: String(i.line) } : {}), ...(validEasy(i.easy) ? { easy: i.easy } : {}) };
     const parsed = typeof q === "string" && isNaN(+q) ? parseIngredientLine(q + " " + (i.unit ? i.unit + " " : "") + item) : null;
     if (parsed && parsed.qty != null) { if (i.category) parsed.category = i.category; return { ...parsed, ...extra }; }
     const qn = q == null || q === "" ? null : parseFloat(q);
@@ -1136,13 +1137,64 @@ function purchaseText(g) {
 // What the list shows: the purchase amount when the item is sold by the piece, else the combined amounts.
 function buyText(g) { const p = purchaseText(g); return p ? p.main + (p.detail ? ` (${p.detail})` : "") : amountText(g); }
 
-// One ingredient's amount for a recipe, in its own unit (recipe sheet and editor).
+// One ingredient's amount for a recipe, in its own unit (editor and the small print under an easy amount).
 function ingAmount(ing, mult) {
   if (ing.qty == null || isNaN(ing.qty)) return "";
   const v = ing.qty * mult, u = String(ing.unit || "").trim();
   if (!u) return fmtNum(Math.ceil(v * 4) / 4);
   if (["g", "ml"].includes(u)) return (v >= 20 ? round(v, 5) : Math.round(v)) + " " + u;
   return fmtNum(v) + " " + u;
+}
+
+/* ---------- easy units ---------- */
+// Recipes keep their source amounts (grams feed the grocery list), and the recipe sheet shows the easiest kitchen
+// unit instead: 200 g onion -> 1⅓ onions, 30 g flour -> ¼ cup. ing.easy = { qty, unit, one, many } is the same amount
+// for the whole recipe, estimated by Claude for the library and for imports; unit "" counts pieces named one/many.
+function validEasy(e) { return !!e && typeof e === "object" && isFinite(e.qty) && e.qty > 0 && typeof e.unit === "string"; }
+// Nearest whole-plus-fraction from the allowed fractions, e.g. 1.3 cups -> "1⅓".
+function fmtFrac(v, fracs) {
+  const sym = { 0.25: "¼", 0.5: "½", 0.75: "¾", 0.33: "⅓", 0.67: "⅔", 0.13: "⅛" };
+  let best = null;
+  for (let w = Math.max(0, Math.floor(v) - 1); w <= Math.floor(v) + 1; w++)
+    for (const f of [0, ...fracs]) { const c = w + f; if (c > 0 && (!best || Math.abs(c - v) < Math.abs(best.c - v))) best = { w, f, c }; }
+  if (!best) best = { w: 0, f: fracs[0], c: fracs[0] };
+  return (best.w || "") + (best.f ? sym[+best.f.toFixed(2)] : "") || "0";
+}
+const SPOON_TSP = { tsp: 1, tbsp: 3, cup: 48 };
+// { q, name } for the sheet: q is the amount column, name replaces the item name for counted pieces.
+function easyAmount(ing, mult) {
+  if (ing.qty == null || isNaN(ing.qty)) return { q: "" };
+  let e = validEasy(ing.easy) ? { ...ing.easy, qty: ing.easy.qty * mult } : null;
+  const u0 = String(ing.unit || "").toLowerCase().trim();
+  // Without an estimate, liquids in ml still read as spoons and cups, and produce in grams as pieces.
+  if (!e && (u0 === "ml" || u0 === "l")) e = { qty: ing.qty * mult * (u0 === "l" ? 1000 : 1) / 4.929, unit: "tsp" };
+  if (!e && (u0 === "g" || u0 === "kg")) {
+    const rule = purchaseRule(ing.item);
+    if (rule && rule.g && !rule.leafG) e = rule.per ? { qty: ing.qty * mult * (u0 === "kg" ? 1000 : 1) / rule.g, unit: rule.one } : { qty: ing.qty * mult * (u0 === "kg" ? 1000 : 1) / rule.g, unit: "", one: rule.one, many: rule.many };
+  }
+  if (!e && u0 in SPOON_TSP) e = { qty: ing.qty * mult, unit: u0 };
+  if (!e) return { q: ingAmount(ing, mult) };
+  let { qty, unit } = e;
+  const u = unit.toLowerCase().trim();
+  if (u in SPOON_TSP) {
+    const tsp = qty * SPOON_TSP[u];
+    if (tsp < 1.4 || (tsp < 2.75 && u === "tsp")) return { q: fmtFrac(tsp, [0.25, 0.5, 0.75, 0.13].filter(f => tsp < 1 || f !== 0.13)) + " tsp" };
+    if (tsp < 11) return { q: fmtFrac(tsp / 3, [0.5]) + " tbsp" };
+    const c = tsp / 48;
+    return { q: fmtFrac(c, [0.25, 0.33, 0.5, 0.67, 0.75]) + (c > 1.12 ? " cups" : " cup") };
+  }
+  if (u === "oz" || u === "lb") {
+    const oz = u === "lb" ? qty * 16 : qty;
+    if (oz < 14) return { q: (oz < 4 ? fmtFrac(oz, [0.5]) : String(Math.round(oz))) + " oz" };
+    return { q: fmtFrac(oz / 16, [0.25, 0.5, 0.75]) + " lb" };
+  }
+  if (u === "g" || u === "ml") return { q: ingAmount({ ...ing, qty: qty, unit: u }, 1) };
+  // Pieces, cans, slices, stalks, scoops: halves, or a quarter when it's that small.
+  const q = qty < 1 ? fmtFrac(qty, [0.25, 0.5, 0.75]) : fmtFrac(qty, [0.5]);
+  const many = qty > 1.25;
+  if (!u) return { q, name: (many ? e.many : e.one) || null };
+  const plural = many && !/s$/.test(u) ? (/(ch|sh|x)$/.test(u) ? u + "es" : u + "s") : u;
+  return { q: q + " " + plural };
 }
 
 /* ---------- persistence ---------- */
@@ -1619,7 +1671,8 @@ function knownIngredients() {
 function ingRow(i, n) {
   const unitOpts = ["", "tsp", "tbsp", "cup", "fl oz", "ml", "l", "g", "kg", "oz", "lb", "clove", "can", "slice", "bunch", "head", "ear", "pinch"];
   const u = String(i.unit || "");
-  return `<tr data-ing-row>
+  const easy = validEasy(i.easy) ? ` data-easy="${esc(JSON.stringify({ ...i.easy, q0: i.qty, u0: u, i0: i.item }))}"` : "";
+  return `<tr data-ing-row${easy}>
     <td class="q"><input aria-label="Amount, row ${n}" data-f="qty" type="number" min="0" step="any" value="${i.qty == null ? "" : +(+i.qty).toFixed(3)}" placeholder="—"></td>
     <td><input aria-label="Unit, row ${n}" data-f="unit" list="unit-list" value="${esc(u)}"></td>
     <td class="it"><input aria-label="Ingredient, row ${n}" data-f="item" list="ing-list" value="${esc(i.item || "")}" required></td>
@@ -1769,8 +1822,10 @@ function renderSheet() {
   const facts = [["cal", "kcal", ""], ["p", "Protein", "g"], ["c", "Carbs", "g"], ["f", "Fat", "g"]]
     .map(([k, l, u]) => `<div><span class="v">${Math.round(r[k] * per)}${u}</span><span class="k">${k === "cal" ? "" : macroDot({ p: "--protein", c: "--carb", f: "--fat" }[k])}${l}</span></div>`).join("");
   const ings = r.ingredients.map(i => {
-    const q = ingAmount(i, mult);
-    return `<li><span class="q">${esc(q)}</span><span class="${q ? "" : "neg"}">${esc(i.item)}${i.prep ? `<span class="muted">, ${esc(i.prep)}</span>` : ""}</span></li>`;
+    const { q, name } = easyAmount(i, mult);
+    // The source amount stays in small print when the easy amount converted it (grams, ml).
+    const src = ingAmount(i, mult), showSrc = q && src && /\b(g|kg|ml|l)$/.test(src);
+    return `<li><span class="q">${esc(q)}</span><span class="${q ? "" : "neg"}">${esc(name || i.item)}${i.prep ? `<span class="muted">, ${esc(i.prep)}</span>` : ""}${showSrc ? `<span class="src">${esc(src)}</span>` : ""}</span></li>`;
   }).join("");
   const steps = (r.steps || []).length
     ? `<ol class="steps">${r.steps.map(s => `<li><span>${esc(s)}</span></li>`).join("")}</ol>`
@@ -2188,7 +2243,13 @@ document.addEventListener("submit", async e => {
     if (!item) return null;
     const qty = f("qty") === "" ? null : parseFloat(f("qty"));
     const orig = tr.nextElementSibling && tr.nextElementSibling.hasAttribute("data-orig") ? tr.nextElementSibling.textContent.replace(/^From the source:\s*/, "") : "";
-    return { item, qty: isNaN(qty) ? null : qty, unit: f("unit").toLowerCase(), prep: f("prep"), category: f("category"), ...(orig ? { line: orig } : {}) };
+    const unit = f("unit").toLowerCase();
+    // Keep the easy amount while the row is the same ingredient in the same unit, scaled to a changed amount.
+    let easy = null;
+    try { const e = tr.dataset.easy && JSON.parse(tr.dataset.easy);
+      if (e && e.u0 === unit && e.i0 === item && qty > 0 && e.q0 > 0) easy = { qty: e.qty * qty / e.q0, unit: e.unit, one: e.one || "", many: e.many || "" };
+    } catch {}
+    return { item, qty: isNaN(qty) ? null : qty, unit, prep: f("prep"), category: f("category"), ...(orig ? { line: orig } : {}), ...(easy ? { easy } : {}) };
   }).filter(Boolean);
   if (!ingredients.length) { toast("Add at least one ingredient."); return; }
   try {

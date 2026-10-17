@@ -42,7 +42,18 @@ const RECIPE_SCHEMA = {
                 qty: { type: ["number", "null"], description: "Amount for the whole recipe; null for 'to taste'" },
                 unit: { type: "string", description: "tsp, tbsp, cup, ml, l, fl oz, g, kg, oz, lb, or a count word like clove, can, slice, bunch, head, ear; empty for plain counts" },
                 prep: { type: "string", description: "Prep note such as minced, diced, thinly sliced; empty if none" },
-                category: { type: "string", enum: SECTIONS }
+                category: { type: "string", enum: SECTIONS },
+                easy: {
+                  type: "object",
+                  description: "Only when unit is g, kg, ml, l, oz or lb: the same whole-recipe amount in the easiest kitchen unit",
+                  properties: {
+                    qty: { type: "number" },
+                    unit: { type: "string", description: "cup, tbsp, tsp, oz, lb, can, slice, stalk, clove, scoop, block, or empty to count pieces" },
+                    one: { type: "string", description: "Singular display name when unit is empty (e.g. 'onion'), else empty" },
+                    many: { type: "string", description: "Plural display name when unit is empty (e.g. 'onions'), else empty" }
+                  },
+                  required: ["qty", "unit", "one", "many"]
+                }
               },
               required: ["line", "item", "qty", "unit", "prep", "category"]
             }
@@ -63,6 +74,7 @@ function instructions(known) {
 - Split every ingredient line into item, qty, unit and prep. Pantry items listed separately (oil, butter, salt, pepper, sugar) are ingredients too.
 - For item, reuse one of the person's existing ingredient names when it is the same thing, so grocery lists merge. Existing names: ${known.length ? known.join(", ") : "(none yet)"}.
 - category is the store section where the item is bought.
+- When an amount is in g, kg, ml, l, oz or lb, also give easy: the same amount in the unit a US home cook would measure without a scale. Produce, eggs and meat or fish that come as pieces count pieces with unit "" (200 g onion -> 1.33; medium onion 150 g, carrot 70 g, potato 200 g, chicken breast 200 g, salmon fillet 150 g); celery in stalks (40 g), garlic in cloves (5 g); Japanese curry roux counts roux trays (about 110 g each); flour, grains, cooked rice, dairy, nuts, frozen fruit, sauces and liquids in cup, tbsp or tsp; ground meat, shrimp and steak in lb or oz; canned goods in cans when at least half a can.
 - Macros are per serving. If the source prints calories but not protein, carbs and fat, keep its calories and estimate the rest. If it prints nothing, estimate all four from the ingredients. Set macrosEstimated true whenever any number is your estimate. Fiber (grams per serving) works the same way: use the printed value, otherwise estimate it from the ingredients and set fiberEstimated true.
 - meals: the meal types the dish suits.
 - steps: short imperative sentences in order, without step numbers.
