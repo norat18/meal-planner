@@ -316,6 +316,8 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .seg button { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-weight: 600; font-size: 13px; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .toggle { display: inline-flex; gap: 8px; align-items: center; font-weight: 600; font-size: 14px; }
+.sheet .wake { align-self: flex-start; font-size: 13px; color: var(--muted); cursor: pointer; }
+.sheet .wake input { width: 18px; height: 18px; accent-color: var(--accent); }
 .save-status { font-size: 13px; color: var(--muted); min-height: 0; }
 .save-status.warn { color: var(--warn); font-weight: 600; }
 .privacy p { margin: 0; max-width: 68ch; color: var(--muted); font-size: 14px; }
@@ -1819,7 +1821,7 @@ function closeRecipe() {
 function renderSheet() {
   const el = document.getElementById("sheet");
   const r = viewing && state.recipes[viewing.id];
-  if (!r) { el.innerHTML = ""; document.body.style.overflow = ""; return; }
+  if (!r) { el.innerHTML = ""; document.body.style.overflow = ""; syncWakeLock(); return; }
   document.body.style.overflow = "hidden";
   const x = viewing.x, per = x || 1;
   const facts = [["cal", "kcal", ""], ["p", "Protein", "g"], ["c", "Carbs", "g"], ["f", "Fat", "g"]]
@@ -1834,6 +1836,7 @@ function renderSheet() {
         <h2 id="sheet-title">${esc(r.name)}<div class="sub">${esc(r.cuisine)} · ${esc(meals)}${r.source ? " · " + esc(r.source) : ""}</div></h2>
         <button class="close" id="sheet-close" data-action="close-sheet" aria-label="Close recipe">×</button>
       </div>
+      ${wakeSupported() ? `<label class="toggle wake"><input type="checkbox" id="keep-awake" ${wantAwake() ? "checked" : ""}> Keep screen on</label>` : ""}
       ${macroSummary(r, 1, null, r.estimated ? "Per serving · estimated, not from the source" : "Per serving")}
       ${x && x !== 1 ? `<div><h3><span>Your portion: ${x} servings</span></h3><div class="mfacts">${facts}</div></div>` : ""}
       ${mfpBlock(r, x)}
@@ -1853,7 +1856,44 @@ function renderSheet() {
     </div></div>`;
   renderSheetIngredients();
   drawBarcode(r);
+  syncWakeLock();
 }
+
+/* ---------- keep screen on ---------- */
+// "Keep screen on" on the recipe sheet holds a screen wake lock so the phone doesn't dim mid-recipe. The choice is
+// remembered on this device; the lock is let go when the recipe closes, and taken again when you come back to the tab
+// (browsers drop it whenever the page is hidden). Browsers without the Wake Lock API don't show the toggle.
+let wakeLock = null, wakeBusy = null;
+function wakeSupported() { return "wakeLock" in navigator; }
+function wantAwake() { return !!lsGet("mpp.keepAwake"); }
+async function syncWakeLock() {
+  if (!wakeSupported()) return;
+  while (wakeBusy) await wakeBusy;
+  const want = !!viewing && wantAwake() && document.visibilityState === "visible";
+  wakeBusy = (async () => {
+    if (want && !wakeLock) {
+      try {
+        const lock = await navigator.wakeLock.request("screen");
+        lock.addEventListener("release", () => { if (wakeLock === lock) wakeLock = null; });
+        wakeLock = lock;
+      } catch { wakeLock = null; }
+    } else if (!want && wakeLock) {
+      const lock = wakeLock; wakeLock = null;
+      try { await lock.release(); } catch {}
+    }
+  })();
+  try { await wakeBusy; } finally { wakeBusy = null; }
+}
+document.addEventListener("visibilitychange", syncWakeLock);
+document.addEventListener("change", async e => {
+  if (e.target.id !== "keep-awake") return;
+  lsSet("mpp.keepAwake", e.target.checked);
+  await syncWakeLock();
+  if (e.target.checked && !wakeLock) {
+    e.target.checked = false; lsSet("mpp.keepAwake", false);
+    toast("This browser didn't allow keeping the screen on. Battery saver can block it.");
+  }
+});
 // The ingredient list on the sheet, scaled to how many people you're cooking for. That number starts at your household
 // size and only changes this view (not the plan or the grocery list), so it's redrawn in place to keep the scroll.
 function renderSheetIngredients() {
