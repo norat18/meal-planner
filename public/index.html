@@ -1810,9 +1810,10 @@ function mfpBrand(r) {
   const pre = String(r.id).split("-")[0];
   return pre === "st" ? "Strong" : pre === "hp" ? "Coach Greg" : pre === "my" ? "Homemade" : pre === "hf" ? "HelloFresh" : pre === "gc" ? "Green Chef" : pre === "ba" ? "Blue Apron" : "";
 }
-// Our MyFitnessPal foods are named "<brand> Strong <recipe name>". The older copies without "Strong" lack fiber;
-// MyFitnessPal doesn't let public foods be edited, so the newer copies replaced them.
-function mfpSearch(r) { return `${mfpBrand(r)} Strong ${r.mfpName || r.name}`; }
+// Our MyFitnessPal foods are named "<brand> Strong <recipe name>" ("Coach Greg Strong Full <name>" for the coach's,
+// which carry the full nutrient panel). MyFitnessPal doesn't let public foods be edited, so newer copies replaced older ones.
+function mfpPrefix(r) { return mfpBrand(r) === "Coach Greg" ? "Strong Full" : "Strong"; }
+function mfpSearch(r) { return `${mfpBrand(r)} ${mfpPrefix(r)} ${r.mfpName || r.name}`; }
 function mfpBlock(r, x) {
   const n = mfpNumbers(r, x);
   const portion = x && x !== 1 ? `, then set servings to ${x}` : "";
@@ -1821,7 +1822,7 @@ function mfpBlock(r, x) {
     ? `<div class="barcode"><svg id="mfp-barcode" role="img" aria-label="MyFitnessPal barcode ${esc(r.mfp.code)}"></svg><span>Scan in MyFitnessPal${portion}</span></div>`
     : "";
   const search = !scan && brand
-    ? `<p class="first-scan">In the MyFitnessPal app, search <b>${esc(mfpSearch(r))}</b> and add it${portion}. Pick the one whose name starts with "Strong": it has fiber${brand === "Coach Greg" ? "" : " and the full nutrient panel"}.</p>`
+    ? `<p class="first-scan">In the MyFitnessPal app, search <b>${esc(mfpSearch(r))}</b> and add it${portion}. Pick the one whose name starts with "${mfpPrefix(r)}": it has fiber and the full nutrient panel.</p>`
     : "";
   return `<div><h3><span>Log in MyFitnessPal</span></h3>
     <div class="mfp-row">${scan}
