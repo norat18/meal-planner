@@ -235,6 +235,10 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .ilist li { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .ilist .q { font-family: var(--font-data); font-size: 13px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ilist .neg { color: var(--muted); }
+.people-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 8px; }
+.people-row .stepper { display: inline-flex; align-items: center; gap: 6px; }
+.people-row .stepper .btn { min-width: 36px; justify-content: center; }
+.people-row output { min-width: 72px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
 .ilist .src { margin-left: 8px; font-family: var(--font-data); font-size: 12px; color: var(--muted); opacity: .8; white-space: nowrap; }
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 12px; }
 .steps li { counter-increment: s; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; line-height: 1.55; max-width: 68ch; }
@@ -1817,21 +1821,13 @@ function renderSheet() {
   const r = viewing && state.recipes[viewing.id];
   if (!r) { el.innerHTML = ""; document.body.style.overflow = ""; return; }
   document.body.style.overflow = "hidden";
-  const H = household(), x = viewing.x, mult = (x || 1) * H / (r.servings || 1);
-  const per = x || 1;
+  const x = viewing.x, per = x || 1;
   const facts = [["cal", "kcal", ""], ["p", "Protein", "g"], ["c", "Carbs", "g"], ["f", "Fat", "g"]]
     .map(([k, l, u]) => `<div><span class="v">${Math.round(r[k] * per)}${u}</span><span class="k">${k === "cal" ? "" : macroDot({ p: "--protein", c: "--carb", f: "--fat" }[k])}${l}</span></div>`).join("");
-  const ings = r.ingredients.map(i => {
-    const { q, name } = easyAmount(i, mult);
-    // The source amount stays in small print when the easy amount converted it (grams, ml).
-    const src = ingAmount(i, mult), showSrc = q && src && /\b(g|kg|ml|l)$/.test(src);
-    return `<li><span class="q">${esc(q)}</span><span class="${q ? "" : "neg"}">${esc(name || i.item)}${i.prep ? `<span class="muted">, ${esc(i.prep)}</span>` : ""}${showSrc ? `<span class="src">${esc(src)}</span>` : ""}</span></li>`;
-  }).join("");
   const steps = (r.steps || []).length
     ? `<ol class="steps">${r.steps.map(s => `<li><span>${esc(s)}</span></li>`).join("")}</ol>`
     : `<p class="muted">No instructions saved for this recipe yet.${state.readOnly ? "" : ` <button class="btn small" data-action="edit-from-sheet" data-id="${esc(r.id)}">Add instructions</button>`}</p>`;
   const meals = r.meals.map(m => SLOTS.find(s => s[0] === m)[1]).join(", ");
-  const portionNote = `Scaled for ${H} ${H === 1 ? "person" : "people"}${x && x !== 1 ? ` at ×${x} servings each` : ""} · recipe makes ${r.servings}`;
   el.innerHTML = `<div class="sheet-back" data-action="close-sheet">
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
       <div class="sheet-head">
@@ -1841,11 +1837,39 @@ function renderSheet() {
       ${macroSummary(r, 1, null, r.estimated ? "Per serving · estimated, not from the source" : "Per serving")}
       ${x && x !== 1 ? `<div><h3><span>Your portion: ${x} servings</span></h3><div class="mfacts">${facts}</div></div>` : ""}
       ${mfpBlock(r, x)}
-      <div><h3><span>Ingredients</span><span style="text-transform:none;letter-spacing:0;font-weight:500">${esc(portionNote)}</span></h3><ul class="ilist">${ings}</ul></div>
+      <div><h3><span>Ingredients</span></h3>
+        <div class="people-row">
+          <span class="label" id="people-label">Cooking for</span>
+          <div class="stepper" role="group" aria-labelledby="people-label">
+            <button type="button" class="btn small" data-action="sheet-people" data-d="-1" aria-label="One fewer person">−</button>
+            <output id="sheet-people" aria-live="polite"></output>
+            <button type="button" class="btn small" data-action="sheet-people" data-d="1" aria-label="One more person">+</button>
+          </div>
+          <span class="muted" id="sheet-portion"></span>
+        </div>
+        <ul class="ilist" id="sheet-ings"></ul></div>
       <div><h3><span>Instructions</span></h3>${steps}</div>
       ${state.readOnly ? "" : `<div class="row"><button class="btn small" data-action="edit-from-sheet" data-id="${esc(r.id)}">Edit recipe</button></div>`}
     </div></div>`;
+  renderSheetIngredients();
   drawBarcode(r);
+}
+// The ingredient list on the sheet, scaled to how many people you're cooking for. That number starts at your household
+// size and only changes this view (not the plan or the grocery list), so it's redrawn in place to keep the scroll.
+function renderSheetIngredients() {
+  const r = viewing && state.recipes[viewing.id], ul = document.getElementById("sheet-ings");
+  if (!r || !ul) return;
+  const n = viewing.people ?? household(), x = viewing.x, mult = (x || 1) * n / (r.servings || 1);
+  ul.innerHTML = r.ingredients.map(i => {
+    const { q, name } = easyAmount(i, mult);
+    // The source amount stays in small print when the easy amount converted it (grams, ml).
+    const src = ingAmount(i, mult), showSrc = q && src && /\b(g|kg|ml|l)$/.test(src);
+    return `<li><span class="q">${esc(q)}</span><span class="${q ? "" : "neg"}">${esc(name || i.item)}${i.prep ? `<span class="muted">, ${esc(i.prep)}</span>` : ""}${showSrc ? `<span class="src">${esc(src)}</span>` : ""}</span></li>`;
+  }).join("");
+  document.getElementById("sheet-people").textContent = `${n} ${n === 1 ? "person" : "people"}`;
+  document.getElementById("sheet-portion").textContent = `${x && x !== 1 ? `×${x} servings each · ` : ""}recipe makes ${r.servings}`;
+  document.querySelector('[data-action="sheet-people"][data-d="-1"]').disabled = n <= 1;
+  document.querySelector('[data-action="sheet-people"][data-d="1"]').disabled = n >= 20;
 }
 
 /* ---------- MyFitnessPal ---------- */
@@ -2035,6 +2059,7 @@ document.addEventListener("click", async e => {
   if (a === "close-sheet") { if (e.target === b || b.id === "sheet-close") closeRecipe(); return; }
   if (a === "cancel-del") { if (e.target === b || b.tagName === "BUTTON") closeDialog(); return; }
   if (a === "view") return openRecipe(b.dataset.id, b.dataset.x, b);
+  if (a === "sheet-people") { if (viewing) { viewing.people = Math.min(20, Math.max(1, (viewing.people ?? household()) + d)); renderSheetIngredients(); } return; }
   if (a === "copy-mfp") { const r = state.recipes[b.dataset.id]; if (r) copyText(mfpLine(r, b.dataset.x ? +b.dataset.x : null), "Copied. Paste into MyFitnessPal Quick Add."); return; }
   if (a === "copy-mfp-day") return copyText(mfpDayText(d), `Copied ${DAYS[d]}'s meals for MyFitnessPal.`);
   switch (a) {
