@@ -152,6 +152,12 @@ nav.tabs .count { font-family: var(--font-data); font-size: 12px; color: var(--m
 /* Groceries */
 .cat { display: grid; gap: 2px; }
 .cat h3 { font-size: 14px; font-family: var(--font-body); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 8px 0 4px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
+.trip-ctl { gap: 8px 12px; align-items: center; }
+.field-inline { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 600; color: var(--muted); }
+.field-inline select { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 6px; padding: 4px 6px; font-size: 13px; }
+.trip { display: grid; gap: 4px; padding-top: 10px; border-top: 2px solid var(--line); margin-top: 6px; }
+.trip-h { font-size: 18px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.trip-h .muted { font-size: 13px; font-weight: 500; }
 .gitem { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px dashed var(--line); cursor: pointer; }
 .gitem input { margin: 0; transform: translateY(2px); accent-color: var(--accent); }
 .gitem .name { font-weight: 600; text-transform: capitalize; }
@@ -414,6 +420,8 @@ const DEFAULT_SETTINGS = {
   batchSize: 4,      // meals a big batch covers: the dinner plus the next meals in a row
   bfRotation: true,  // repeat breakfasts in blocks (off = a different breakfast every day)
   bfMode: "three",   // "three": Mon–Tue, Wed–Thu, Fri–Sun · "two": Mon–Thu, Fri–Sun. Fri–Sun is always car-friendly
+  trips: 1,          // grocery trips a week: 1, or 2 (a weekend shop plus a midweek one, for freshness)
+  trip2Day: "auto",  // with 2 trips, the day of the midweek shop (0 = Monday … 6 = Sunday), or "auto" for the freshest
   manual: false      // Manual mode: every slot is chosen and portioned by hand; no linking, filtering or planner
 };
 const BF_PATTERNS = { three: [[0, 1], [2, 3], [4, 5, 6]], two: [[0, 1, 2, 3], [4, 5, 6]] };
@@ -1042,18 +1050,22 @@ function household() { return Math.max(1, Math.round(+state.settings.household |
 /* ---------- groceries ---------- */
 // One line per ingredient name (prep notes dropped), scaled to household size.
 // Amounts add up within a unit family; different families show side by side ("2 cloves + 1 tbsp").
-function groceries() {
+// keep(ing, cookDay) limits the list to some ingredients, e.g. one shopping trip's. A meal's ingredients are needed on
+// the day it's cooked, which for leftovers and repeats is the first day of the run.
+function groceries(keep) {
   const items = new Map(), cook = new Map(), H = household(), have = haveSet();
   state.plan.days.forEach((day, d) => {
     for (const s of activeSlots()) {
       const c = day.slots[s];
       if (!c || !state.recipes[c.id]) continue;
+      const cookDay = linkedSlots(d, s)[0][0];
       for (const { id, x: dx } of [{ id: c.id, x: c.x }, ...slotExtras(c)]) {
         const r = state.recipes[id], x = dx || 1;
         const ck = cook.get(r.id) || { r, portions: 0, days: new Set(), meals: [] };
         ck.portions += x * H; ck.days.add(DAYS[d].slice(0, 3)); ck.meals.push([d, s]); cook.set(r.id, ck);
         const f = x * H / (r.servings || 1);
         for (const ing of r.ingredients) {
+          if (keep && !keep(ing, cookDay)) continue;
           const k = itemKey(ing.item);
           const g = items.get(k) || { key: k, name: ing.item, category: ing.category || "Other", amounts: {}, metric: {}, used: new Set(), untracked: false, have: have.has(k) };
           g.used.add(r.name);
@@ -1069,6 +1081,54 @@ function groceries() {
     }
   });
   return { items: [...items.values()], cook: [...cook.values()] };
+}
+/* ---------- shopping trips ---------- */
+// Roughly how many days an ingredient stays good after you buy it. Prepared and packaged forms keep; fish and raw meat
+// last about 2 days, delicate produce about 4, bread 5, fresh dairy and tofu a week; hardy produce, eggs and cheese
+// two weeks. Anything that keeps 14 days or more is "stable" and goes on the first trip.
+const SHELF = [
+  [/frozen|canned|dried|jarred|powder|paste|pickle|smoked salmon|jerky|bacon|sausage|chorizo|pancetta|ham\b|char siu|sauce|broth|stock|bouillon|coconut milk|demi-glace|in water|in oil|lard|ground roasted|seasoning|spice|vinegar|\boil\b|ground (black |white )?(pepper|cumin|coriander|ginger|turmeric|cinnamon|cardamom|nutmeg|clove|paprika|peanut|nut|almond|flax)/, 99],
+  [/fish|salmon|cod\b|tuna|tilapia|halibut|sablefish|shrimp|prawn|scallop|lobster|crab|oyster|seafood|eel/, 2],
+  [/chicken|turkey|pork|beef|steak|lamb|ground |mince|short rib|chuck beef|sirloin|tenderloin/, 2],
+  [/spinach|lettuce|arugula|greens|salad leaves|cilantro|parsley|basil|mint|dill|herb|scallion|green onion|chive|bean sprout|bok choy|choy sum|kale|berr|mushroom|shiitake|avocado|asparagus|broccolini|micro/, 4],
+  [/bread|tortilla|bun\b|buns\b|bagel|pita|muffin|ciabatta|naan|fresh .*noodle|wonton/, 5],
+  [/milk|cream|yogurt|ricotta|cottage|tofu|mozzarella|feta|paneer|halloumi/, 7],
+  [/bell pepper|zucchini|cucumber|tomato|broccoli|cauliflower|green bean|snap pea|snow pea|eggplant|corn|jalape|chili pepper|mango|pineapple|peach|banana|pear\b|grape/, 6],
+  [/onion|garlic|shallot|potato|carrot|cabbage|celery|lemon|lime|orange|apple|ginger|squash|pumpkin|radish|daikon|egg|cheese|parmesan|cheddar|butter/, 14],
+  [/oil|vinegar|flour|sugar|salt|pepper|spice|seasoning|sauce|rice|pasta|noodle|macaroni|spaghetti|oats|quinoa|couscous|bulgur|lentil|bean|chickpea|stock|broth|honey|syrup|nut|almond|walnut|cashew|pecan|seed|sesame|miso|mirin|sake|wine|ketchup|mustard|mayo|chocolate|protein|whey|cereal|granola|cracker|chip|raisin|cumin|paprika|oregano|cinnamon|turmeric|garam|cayenne|vanilla|baking|cornstarch|water|ice/, 99]
+];
+const SHELF_BY_CAT = { "Produce": 6, "Meat & Seafood": 2, "Dairy & Eggs": 10 };
+function shelfLife(ing) {
+  const n = String(ing.item).toLowerCase();
+  for (const [re, days] of SHELF) if (re.test(n)) return days;
+  return SHELF_BY_CAT[ing.category] || 99;
+}
+const isStable = ing => shelfLife(ing) >= 14;
+// The midweek trip covers meals cooked from day k on (bought the day before, DAYS[k - 1]); the weekend trip covers
+// Monday to day k - 1 and every stable item. "auto" picks the k that keeps perishables freshest: the fewest days each one
+// waits between shopping and cooking, with a heavy cost for any day past its shelf life.
+function tripSplitDay() {
+  const S = state.settings;
+  if (S.trip2Day !== "auto" && S.trip2Day >= 0 && S.trip2Day <= 5) return +S.trip2Day + 1; // shop Monday–Saturday
+  const uses = [];
+  groceries((ing, cd) => { const L = shelfLife(ing); if (L < 14) uses.push([cd, L]); return false; });
+  let best = 3, bestCost = Infinity;
+  for (let k = 2; k <= 6; k++) {
+    let cost = 0;
+    for (const [cd, L] of uses) { const age = cd < k ? cd + 1 : cd - k + 1; cost += age * 0.1 + Math.max(0, age - L) * 10; }
+    cost += Math.abs(k - 3.5) * 0.01; // ties go to midweek
+    if (cost < bestCost) { bestCost = cost; best = k; }
+  }
+  return best;
+}
+// [{ label, covers, items }] for each trip; items as groceries() returns them.
+function shoppingTrips() {
+  if (state.settings.trips !== 2) return [{ key: "", label: "", covers: "", items: groceries().items }];
+  const k = tripSplitDay();
+  return [
+    { key: "", label: "Sunday", covers: `Monday–${DAYS[k - 1]} meals, plus pantry staples and long-lasting produce`, items: groceries((ing, cd) => isStable(ing) || cd < k).items },
+    { key: "t2|", label: DAYS[k - 1], covers: `fresh items for ${DAYS[k]}–Sunday meals`, items: groceries((ing, cd) => !isStable(ing) && cd >= k).items }
+  ];
 }
 // Unique ingredients the plan needs, not counting ones marked "I already have this".
 function uniqueCount() { return groceries().items.filter(g => !g.have).length; }
@@ -1648,19 +1708,29 @@ function slotCell(d, s) {
 function viewGroceries() {
   const { items, cook } = groceries(), H = household();
   if (!items.length) return `<div class="panel empty"><h2>Your list is empty</h2><p>Plan some meals and the grocery list builds itself.</p><button class="btn primary" data-action="goto" data-tab="plan">Go to week plan</button></div>`;
-  const checked = state.plan.checked || {};
+  const checked = state.plan.checked || {}, S = state.settings;
   const buy = items.filter(i => !i.have), have = items.filter(i => i.have);
   const keyId = k => esc(k.replace(/\W+/g, "-"));
-  const groups = CATS.map(cat => {
-    const list = buy.filter(i => (CATS.includes(i.category) ? i.category : "Other") === cat).sort((a, b) => a.name.localeCompare(b.name));
+  // One list per shopping trip; a trip's check marks are kept under its own key prefix.
+  const trips = shoppingTrips();
+  const groupsFor = (list0, pre) => CATS.map(cat => {
+    const list = list0.filter(i => !i.have && (CATS.includes(i.category) ? i.category : "Other") === cat).sort((a, b) => a.name.localeCompare(b.name));
     if (!list.length) return "";
     return `<div class="cat"><h3><span>${esc(cat)}</span><span class="num">${list.length}</span></h3>
-      ${list.map(g => `<div class="gitem ${checked[g.key] ? "done" : ""}">
-        <input type="checkbox" id="g-${keyId(g.key)}" data-gkey="${esc(g.key)}" ${checked[g.key] ? "checked" : ""}>
-        <label class="name" for="g-${keyId(g.key)}">${esc(g.name)}</label><span class="amt">${(p => p ? `${esc(p.main)}${p.detail ? `<br><span class="muted" style="font-size:11px">${esc(p.detail)}</span>` : ""}` : esc(amountText(g)))(purchaseText(g))}</span>
+      ${list.map(g => { const ck = pre + g.key; return `<div class="gitem ${checked[ck] ? "done" : ""}">
+        <input type="checkbox" id="g-${keyId(ck)}" data-gkey="${esc(ck)}" ${checked[ck] ? "checked" : ""}>
+        <label class="name" for="g-${keyId(ck)}">${esc(g.name)}</label><span class="amt">${(p => p ? `${esc(p.main)}${p.detail ? `<br><span class="muted" style="font-size:11px">${esc(p.detail)}</span>` : ""}` : esc(amountText(g)))(purchaseText(g))}</span>
         <button class="have-btn" data-action="have" data-key="${esc(g.key)}" title="Hide this from future lists until you add it back">I already have this</button>
-        <span class="used">${esc([...g.used].join(", "))}</span></div>`).join("")}</div>`;
+        <span class="used">${esc([...g.used].join(", "))}</span></div>`; }).join("")}</div>`;
   }).join("");
+  const k2 = S.trips === 2 ? tripSplitDay() : 0;
+  const tripCtl = `<div class="row trip-ctl"><span class="label">Shopping trips</span>
+      <div class="seg" role="group" aria-label="Shopping trips a week">${[1, 2].map(n => `<button data-action="trips" data-n="${n}" aria-pressed="${(S.trips || 1) === n}">${n === 1 ? "Once a week" : "Twice a week"}</button>`).join("")}</div>
+      ${S.trips === 2 ? `<label class="field-inline">Second trip <select data-trip2 aria-label="Day of the second trip"><option value="auto" ${S.trip2Day === "auto" ? "selected" : ""}>Freshest: ${DAYS[k2 - 1]}</option>${DAYS.slice(0, 6).map((n, i) => `<option value="${i}" ${S.trip2Day === i ? "selected" : ""}>${n}</option>`).join("")}</select></label>` : ""}</div>
+    ${S.trips === 2 ? `<p class="hint">Fish, meat, leafy greens and berries are bought on the trip just before the meal that uses them is cooked. Pantry staples, frozen and canned food, eggs, cheese and long-lasting produce all go on the first trip.</p>` : ""}`;
+  const groups = S.trips === 2
+    ? trips.map((t, i) => { const n = t.items.filter(g => !g.have).length; return `<div class="trip"><h2 class="trip-h">Trip ${i + 1} · ${esc(t.label)} <span class="muted num">${n} item${n === 1 ? "" : "s"}</span></h2><p class="hint">For ${esc(t.covers)}.</p>${n ? groupsFor(t.items, t.key) : `<p class="muted">Nothing to buy on this trip.</p>`}</div>`; }).join("")
+    : groupsFor(items, "");
   const haveList = have.length ? `<details class="cat"><summary class="label" style="cursor:pointer;padding:10px 0">Items you already have (${have.length}), hidden from the list</summary>
       ${have.sort((a, b) => a.name.localeCompare(b.name)).map(g => `<div class="gitem"><span></span><span class="name">${esc(g.name)}</span><span class="amt muted">${esc(buyText(g))}</span>
         <button class="have-btn" data-action="unhave" data-key="${esc(g.key)}">Running low? Add back</button></div>`).join("")}</details>` : "";
@@ -1674,6 +1744,7 @@ function viewGroceries() {
     <section class="panel">
       <div class="row"><div><div class="bigstat num">${buy.length}</div><div class="muted">items to buy for ${H} ${H === 1 ? "person" : "people"}${have.length ? `, plus ${have.length} you already have` : ""}</div></div>
         <span class="spacer"></span><button class="btn" data-action="copy-list">Copy list</button><button class="btn ghost small" data-action="uncheck">Uncheck all</button></div>
+      ${tripCtl}
       ${groups}
       ${haveList}
       ${otherHave.length ? `<p class="hint">You also marked ${otherHave.length} item${otherHave.length === 1 ? "" : "s"} you have that this week doesn't use.</p>` : ""}
@@ -2363,16 +2434,18 @@ document.addEventListener("click", async e => {
       savePlan(); return render();
     }
     case "copy-list": {
-      const { items } = groceries();
-      const txt = CATS.map(cat => {
+      const trips = shoppingTrips();
+      const catText = items => CATS.map(cat => {
         const l = items.filter(i => (CATS.includes(i.category) ? i.category : "Other") === cat).sort((x, y) => x.name.localeCompare(y.name));
         return l.length ? cat + "\n" + l.map(g => `- ${g.name}: ${buyText(g)}`).join("\n") : "";
       }).filter(Boolean).join("\n\n");
+      const txt = trips.length > 1 ? trips.map((t, i) => `TRIP ${i + 1} · ${t.label.toUpperCase()} (for ${t.covers})\n\n${catText(t.items)}`).join("\n\n\n") : catText(trips[0].items);
       try { await navigator.clipboard.writeText(txt); toast("Grocery list copied."); }
       catch { const ta = document.createElement("textarea"); ta.value = txt; ta.className = "code"; b.closest(".panel").prepend(ta); ta.select(); toast("Select-all is ready. Copy with your keyboard."); }
       return;
     }
     case "uncheck": state.plan.checked = {}; savePlan(); return render();
+    case "trips": S.trips = +b.dataset.n; saveSettings(); return render();
     case "remove-examples": {
       if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "Click again to remove"; return; }
       const ids = Object.values(state.recipes).filter(r => r.example).map(r => r.id);
@@ -2469,6 +2542,7 @@ document.addEventListener("change", e => {
   }
   if (t.matches("[data-mslot]")) { S.slots[t.dataset.mslot] = t.checked; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
   if (t.matches("[data-setting0]")) { const v = parseFloat(t.value); S[t.dataset.setting0] = v > 0 ? Math.round(v) : 0; saveSettings(); state.plan.days.forEach((_, d) => rebalance(d)); savePlan(); return render(); }
+  if (t.matches("select[data-trip2]")) { S.trip2Day = t.value === "auto" ? "auto" : +t.value; saveSettings(); return render(); }
   if (t.matches("[data-setting]")) {
     const v = parseFloat(t.value); if (!(v > 0)) return;
     S[t.dataset.setting] = t.dataset.setting === "household" ? Math.round(v) : v;
