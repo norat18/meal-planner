@@ -210,6 +210,10 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .linkish { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
 .linkish:hover { text-decoration-color: var(--accent); color: var(--accent); }
 .slot-actions { display: flex; gap: 2px; }
+.portion { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.portion .lock { font-size: 15px; min-width: 28px; min-height: 28px; border: 1px solid var(--line); }
+.portion b { color: var(--ink); min-width: 36px; text-align: center; font-weight: 600; }
+.manual-toggle { align-self: flex-start; }
 .pick-back { align-items: flex-start; }
 .sheet.pick { gap: 12px; max-height: min(640px, 100%); grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }
 .pick #pick-q { width: 100%; font-size: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
@@ -401,7 +405,8 @@ const DEFAULT_SETTINGS = {
   bigBatches: 0,     // big batches the planner places each week (on top of any picked by hand)
   batchSize: 4,      // meals a big batch covers: the dinner plus the next meals in a row
   bfRotation: true,  // repeat breakfasts in blocks (off = a different breakfast every day)
-  bfMode: "three"    // "three": Mon–Tue, Wed–Thu, Fri–Sun · "two": Mon–Thu, Fri–Sun. Fri–Sun is always car-friendly
+  bfMode: "three",   // "three": Mon–Tue, Wed–Thu, Fri–Sun · "two": Mon–Thu, Fri–Sun. Fri–Sun is always car-friendly
+  manual: false      // Manual mode: every slot is chosen and portioned by hand; no linking, filtering or planner
 };
 const BF_PATTERNS = { three: [[0, 1], [2, 3], [4, 5, 6]], two: [[0, 1, 2, 3], [4, 5, 6]] };
 function bfGroups() { return BF_PATTERNS[state.settings.bfMode] || BF_PATTERNS.three; }
@@ -727,6 +732,7 @@ function solve(recs) {
 /* ---------- linked meals (leftovers + breakfast rotation) ---------- */
 function linkMode() {
   const S = state.settings, act = activeSlots();
+  if (S.manual) return { lo: false, bf: false };
   return { lo: !!S.leftovers && act.includes("lunch") && act.includes("dinner"), bf: !!S.bfRotation && act.includes("breakfast") };
 }
 function bfGroup(d) { return bfGroups().findIndex(g => g.includes(d)); }
@@ -976,6 +982,7 @@ function dayMiss(d) {
   return { k: worst, name: names[worst], text: `${names[worst]} ${diff > 0 ? "over" : "under"} by ${Math.abs(diff)}${worst === "cal" ? " kcal" : " g"} (${Math.abs(Math.round(st.dev[worst] * 100))}%)` };
 }
 function rebalance(d) {
+  if (state.settings.manual) return; // Manual mode keeps the portions you set
   const day = state.plan.days[d], act = activeSlots();
   const filled = act.filter(s => day.slots[s] && state.recipes[day.slots[s].id]);
   if (filled.length < act.length) return;
@@ -1474,8 +1481,10 @@ function viewPlan() {
       ${on ? `<span class="pill ${ws.on === 7 ? "ok" : ws.complete ? "warn" : ""}">${ws.on} of 7 days on target</span>` : ""}
       <span><b class="num">${ws.unique}</b> <span class="muted">unique ingredients${ws.have ? `, not counting ${ws.have} you already have` : ""}</span></span>
     </div>
-    ${misses.length ? `<div class="notice">No plan from your recipes hits every target. ${misses.map(esc).join(" · ")}. Try wider tolerances under Targets, or add recipes that fill the gap.</div>` : ""}
-    <div class="row">
+    <label class="toggle manual-toggle"><input type="checkbox" data-flag="manual" ${S.manual ? "checked" : ""}> Manual mode: I choose every meal and portion</label>
+    ${S.manual ? `<p class="hint">Manual mode is on. The planner, leftovers, breakfast repeats, big batches, cuisine days and meal-type filters are all off: every slot is yours to fill with any recipe, at the portion you set. ${on ? "The meters still show how each day compares with your goals." : ""}</p>` : ""}
+    ${misses.length && !S.manual ? `<div class="notice">No plan from your recipes hits every target. ${misses.map(esc).join(" · ")}. Try wider tolerances under Targets, or add recipes that fill the gap.</div>` : ""}
+    ${S.manual ? `<div class="row"><span class="spacer"></span><button class="btn ghost small" data-action="clear-all">Clear all</button></div>` : `<div class="row">
       <span class="label">Cuisines</span>
       <div class="chips">${chips}</div>
     </div>
@@ -1488,7 +1497,7 @@ function viewPlan() {
       <button class="btn ghost small" data-action="clear-unlocked">Clear unpinned</button>
       <button class="btn ghost small" data-action="clear-all">Clear all</button>
     </div>
-    <p class="hint">No recipe is cooked twice, and the week mixes at least 2 cuisines${S.minimize ? " (relaxed while Minimize groceries is on)" : ""}.${on ? ` ${targetsOn() && fiberOn() ? "Macro targets and your fiber minimum come" : targetsOn() ? "Macro targets come" : "Your fiber minimum comes"} first, then variety, then the shortest list.` : " Among varied weeks, the planner picks the one with the fewest unique ingredients."}${L.lo ? " Each dinner comes back as the next day's lunch." : ""}${L.bf ? ` Breakfast repeats ${bfGroups().map(bfLabel).join(", ").replace(/, ([^,]*)$/, " and $1")}, with car-friendly picks for Fri–Sun.` : ""} Pick a meal yourself and it gets pinned.</p>
+    <p class="hint">No recipe is cooked twice, and the week mixes at least 2 cuisines${S.minimize ? " (relaxed while Minimize groceries is on)" : ""}.${on ? ` ${targetsOn() && fiberOn() ? "Macro targets and your fiber minimum come" : targetsOn() ? "Macro targets come" : "Your fiber minimum comes"} first, then variety, then the shortest list.` : " Among varied weeks, the planner picks the one with the fewest unique ingredients."}${L.lo ? " Each dinner comes back as the next day's lunch." : ""}${L.bf ? ` Breakfast repeats ${bfGroups().map(bfLabel).join(", ").replace(/, ([^,]*)$/, " and $1")}, with car-friendly picks for Fri–Sun.` : ""} Pick a meal yourself and it gets pinned.</p>`}
   </section>
   <div class="week">${days}</div>`;
 }
@@ -1524,15 +1533,15 @@ function dayCard(d) {
         <span class="tick" style="left:calc(${pct(1)}% - 1px)"></span>
       </div></div>`;
   }).join("")) + fibMeter;
-  const action = on && st.complete && !st.feasible ? `<button class="btn small" data-action="fix-day" data-d="${d}">Rebalance day</button>`
+  const action = S.manual ? "" : on && st.complete && !st.feasible ? `<button class="btn small" data-action="fix-day" data-d="${d}">Rebalance day</button>`
     : !st.complete ? `<button class="btn small" data-action="fill-day" data-d="${d}">Fill the rest</button>` : `<button class="btn ghost small" data-action="reroll-day" data-d="${d}">Reroll</button>`;
   return `<article class="day">
     <div class="day-head">
       <h3>${DAYS[d]}</h3>
-      <select id="dc-${d}" data-daycuisine="${d}" aria-label="${DAYS[d]} cuisine">
+      ${S.manual ? "" : `<select id="dc-${d}" data-daycuisine="${d}" aria-label="${DAYS[d]} cuisine">
         <option value="">Any cuisine</option>
         ${cs.map(c => `<option value="${esc(c)}" ${day.cuisine === c ? "selected" : ""}>${esc(c)} day</option>`).join("")}
-      </select>
+      </select>`}
       ${pill}<span class="spacer"></span>${st.filled ? `<button class="btn ghost small" data-action="copy-mfp-day" data-d="${d}" title="Copy each meal's calories and macros for MyFitnessPal Quick Add">Copy for MFP</button>` : ""}${action}
     </div>
     <div class="slots">${slots}</div>
@@ -1542,6 +1551,8 @@ function dayCard(d) {
 
 // The recipes a slot offers: a leftover slot offers what its cooking slot does.
 function slotIds(d, s) {
+  // Manual mode offers every recipe in every slot.
+  if (state.settings.manual) return Object.keys(state.recipes);
   const run = (s === "lunch" || s === "dinner") ? runOf(d, s) : null;
   const [d0, s0] = run ? run.slots[0] : [d, s];
   return d0 !== d || s0 !== s ? eligibleIds(s0, state.plan.days[d0].cuisine) : slotChoices(d, s);
@@ -1572,20 +1583,20 @@ function slotCell(d, s) {
   const byC = {};
   ids.forEach(id => { const x = state.recipes[id]; (byC[x.cuisine] = byC[x.cuisine] || []).push(x); });
   const opts = Object.keys(byC).sort().map(cu => `<optgroup label="${esc(cu)}">${byC[cu].sort((a, b) => a.name.localeCompare(b.name)).map(x => `<option value="${esc(x.id)}" ${r && r.id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</optgroup>`).join("");
-  const x = c ? c.x || 1 : 1;
-  const meta = r ? (on ? `<b>×${x}</b> serving · ${Math.round(r.cal * x)} kcal · ${Math.round(r.p * x)}P ${Math.round(r.c * x)}C ${Math.round(r.f * x)}F${r.fib != null ? ` ${Math.round(r.fib * x)}Fb` : ""}${r.estimated || r.fibEstimated ? ` <span class="est" title="Macros are estimates">est.</span>` : ""}` : `${esc(r.cuisine)}`)
+  const x = c ? c.x || 1 : 1, manual = !!state.settings.manual;
+  const meta = r ? (on || manual ? `<b>×${x}</b> serving · ${Math.round(r.cal * x)} kcal · ${Math.round(r.p * x)}P ${Math.round(r.c * x)}C ${Math.round(r.f * x)}F${r.fib != null ? ` ${Math.round(r.fib * x)}Fb` : ""}${r.estimated || r.fibEstimated ? ` <span class="est" title="Macros are estimates">est.</span>` : ""}` : `${esc(r.cuisine)}`)
     : (c && !r ? "Recipe was deleted" : "Choose a meal");
   // Cooking signal (share of plan cooked) and a 1–5 rating, on the slot where the meal is cooked.
   const key = `${d}-${s}`, ck = (state.plan.cooked || {})[key];
   const cooked = r && isCookSlot(d, s) ? `<div class="cooked"><label><input type="checkbox" data-cooked="${key}" ${ck ? "checked" : ""}> Cooked</label>${ck ? `<select data-rating="${key}" aria-label="Rate this meal"><option value="">Rate</option>${[5,4,3,2,1].map(n => `<option value="${n}" ${ck.rating === n ? "selected" : ""}>${"★".repeat(n)}</option>`).join("")}</select>` : ""}</div>` : "";
   return `<div class="slot ${c && c.locked ? "locked" : ""}">
     <div class="slot-top"><span class="label">${label}${r && on ? ` <span class="ctag">· ${esc(r.cuisine)}</span>` : ""}</span>
-      <span class="slot-actions">${state.readOnly ? "" : `<button class="lock" data-action="pick" data-d="${d}" data-s="${s}" title="Search for a meal" aria-label="Search for a meal for ${DAYS[d]} ${label}">Search</button>`}${r ? `<button class="lock" data-action="view" data-id="${esc(r.id)}" data-x="${x}" title="Ingredients and instructions">Recipe</button><button class="lock" data-action="lock" data-d="${d}" data-s="${s}" aria-pressed="${!!c.locked}" title="${c.locked ? "Pinned: the planner won't change this" : "Pin this meal"}">${c.locked ? "Pinned" : "Pin"}</button>` : ""}</span>
+      <span class="slot-actions">${state.readOnly ? "" : `<button class="lock" data-action="pick" data-d="${d}" data-s="${s}" title="Search for a meal" aria-label="Search for a meal for ${DAYS[d]} ${label}">Search</button>`}${r ? `<button class="lock" data-action="view" data-id="${esc(r.id)}" data-x="${x}" title="Ingredients and instructions">Recipe</button>${manual ? "" : `<button class="lock" data-action="lock" data-d="${d}" data-s="${s}" aria-pressed="${!!c.locked}" title="${c.locked ? "Pinned: the planner won't change this" : "Pin this meal"}">${c.locked ? "Pinned" : "Pin"}</button>`}` : ""}</span>
     </div>
     <select id="sl-${d}-${s}" data-d="${d}" data-s="${s}" aria-label="${DAYS[d]} ${label}">
       <option value="">— Empty —</option>${opts}
     </select>
-    <div class="slot-meta">${meta}</div>${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${batchSel}${cooked}
+    <div class="slot-meta">${meta}</div>${manual && r && !state.readOnly ? `<div class="portion" role="group" aria-label="${DAYS[d]} ${label} portion"><span>Portion</span><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="-0.25" aria-label="Smaller portion" ${x <= 0.25 ? "disabled" : ""}>−</button><b class="num">×${x}</b><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="0.25" aria-label="Larger portion" ${x >= 4 ? "disabled" : ""}>+</button></div>` : ""}${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${batchSel}${cooked}
   </div>`;
 }
 
@@ -2186,6 +2197,12 @@ document.addEventListener("click", async e => {
   if (a === "cancel-del") { if (e.target === b || b.tagName === "BUTTON") closeDialog(); return; }
   if (a === "view") return openRecipe(b.dataset.id, b.dataset.x, b);
   if (a === "pick") return openPicker(+b.dataset.d, b.dataset.s, b);
+  // Manual mode: portions step by a quarter serving, from ¼ to 4.
+  if (a === "portion") {
+    const c = state.plan.days[+b.dataset.d].slots[b.dataset.s]; if (!c) return;
+    c.x = Math.min(4, Math.max(0.25, Math.round(((c.x || 1) + +b.dataset.dx) * 4) / 4));
+    savePlan(); render(); document.querySelector(`[data-action="portion"][data-d="${b.dataset.d}"][data-s="${b.dataset.s}"][data-dx="${b.dataset.dx}"]`)?.focus(); return;
+  }
   if (a === "close-pick") { if (e.target === b || b.classList.contains("close")) closePicker(); return; }
   if (a === "pick-one") return pickRecipe(b.dataset.id);
   if (a === "pick-clear") return pickRecipe("");
