@@ -210,6 +210,18 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .linkish { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
 .linkish:hover { text-decoration-color: var(--accent); color: var(--accent); }
 .slot-actions { display: flex; gap: 2px; }
+.pick-back { align-items: flex-start; }
+.sheet.pick { gap: 12px; max-height: min(640px, 100%); grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }
+.pick #pick-q { width: 100%; font-size: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+.pick-list { overflow-y: auto; display: grid; align-content: start; gap: 2px; min-height: 0; }
+.pick-row { display: grid; gap: 2px; text-align: left; width: 100%; background: none; border: 0; border-radius: 8px; padding: 8px 10px; cursor: pointer; color: var(--ink); font: inherit; }
+.pick-row:hover, .pick-row:focus-visible { background: var(--soft); }
+.pick-row.on { background: var(--soft); box-shadow: inset 3px 0 0 var(--accent); }
+.pick-row .pn { font-weight: 600; font-size: 14px; }
+.pick-row .pm { font-size: 12px; color: var(--muted); font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.pick-sep { margin: 10px 10px 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+/* On phones the search fills the screen from the top, so the box stays above the keyboard. */
+@media (max-width: 560px) { .sheet-back.pick-back { align-items: stretch; padding-bottom: 0; } .sheet.pick { max-height: none; border-radius: 14px 14px 0 0; } }
 
 /* Recipe sheet */
 .sheet-back {
@@ -347,6 +359,7 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
   <main id="view" aria-live="polite"><div class="empty">Loading your recipes…</div></main>
 </div>
 <div id="sheet"></div>
+<div id="picker"></div>
 <div id="dialog"></div>
 <div class="toast" id="toast" hidden></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
@@ -1527,13 +1540,19 @@ function dayCard(d) {
   </article>`;
 }
 
+// The recipes a slot offers: a leftover slot offers what its cooking slot does.
+function slotIds(d, s) {
+  const run = (s === "lunch" || s === "dinner") ? runOf(d, s) : null;
+  const [d0, s0] = run ? run.slots[0] : [d, s];
+  return d0 !== d || s0 !== s ? eligibleIds(s0, state.plan.days[d0].cuisine) : slotChoices(d, s);
+}
 function slotCell(d, s) {
   const day = state.plan.days[d], c = day.slots[s], r = c && state.recipes[c.id];
   const label = SLOTS.find(x => x[0] === s)[1];
   const L = linkMode(), on = goalsOn();
   const run = (s === "lunch" || s === "dinner") ? runOf(d, s) : null;
   const [d0, s0] = run ? run.slots[0] : [d, s];
-  const ids = d0 !== d || s0 !== s ? eligibleIds(s0, state.plan.days[d0].cuisine) : slotChoices(d, s);
+  const ids = slotIds(d, s);
   const mealName = ([x, y]) => `${DAYS[x].slice(0, 3)} ${y}`;
   let link = "", batchSel = "";
   if (run && (d0 !== d || s0 !== s)) link = `Leftovers from ${DAYS[d0]}'s ${s0}`;
@@ -1561,7 +1580,7 @@ function slotCell(d, s) {
   const cooked = r && isCookSlot(d, s) ? `<div class="cooked"><label><input type="checkbox" data-cooked="${key}" ${ck ? "checked" : ""}> Cooked</label>${ck ? `<select data-rating="${key}" aria-label="Rate this meal"><option value="">Rate</option>${[5,4,3,2,1].map(n => `<option value="${n}" ${ck.rating === n ? "selected" : ""}>${"★".repeat(n)}</option>`).join("")}</select>` : ""}</div>` : "";
   return `<div class="slot ${c && c.locked ? "locked" : ""}">
     <div class="slot-top"><span class="label">${label}${r && on ? ` <span class="ctag">· ${esc(r.cuisine)}</span>` : ""}</span>
-      ${r ? `<span class="slot-actions"><button class="lock" data-action="view" data-id="${esc(r.id)}" data-x="${x}" title="Ingredients and instructions">Recipe</button><button class="lock" data-action="lock" data-d="${d}" data-s="${s}" aria-pressed="${!!c.locked}" title="${c.locked ? "Pinned: the planner won't change this" : "Pin this meal"}">${c.locked ? "Pinned" : "Pin"}</button></span>` : ""}
+      <span class="slot-actions">${state.readOnly ? "" : `<button class="lock" data-action="pick" data-d="${d}" data-s="${s}" title="Search for a meal" aria-label="Search for a meal for ${DAYS[d]} ${label}">Search</button>`}${r ? `<button class="lock" data-action="view" data-id="${esc(r.id)}" data-x="${x}" title="Ingredients and instructions">Recipe</button><button class="lock" data-action="lock" data-d="${d}" data-s="${s}" aria-pressed="${!!c.locked}" title="${c.locked ? "Pinned: the planner won't change this" : "Pin this meal"}">${c.locked ? "Pinned" : "Pin"}</button>` : ""}</span>
     </div>
     <select id="sl-${d}-${s}" data-d="${d}" data-s="${s}" aria-label="${DAYS[d]} ${label}">
       <option value="">— Empty —</option>${opts}
@@ -1974,9 +1993,76 @@ function mfpDayText(d) {
   return `${DAYS[d]} for MyFitnessPal Quick Add\n` + lines.join("\n");
 }
 document.addEventListener("keydown", e => {
+  // In meal search, Enter picks the top match and the arrow keys move through the results.
+  if (picking && (e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    const rows = [...document.querySelectorAll("#pick-list .pick-row")], i = rows.indexOf(document.activeElement);
+    if (e.target.id === "pick-q" && e.key === "Enter") { e.preventDefault(); if (rows[0]) pickRecipe(rows[0].dataset.id); return; }
+    if (e.key === "ArrowDown" && rows.length) { e.preventDefault(); rows[Math.min(rows.length - 1, i + 1)].focus(); return; }
+    if (e.key === "ArrowUp" && i >= 0) { e.preventDefault(); (i === 0 ? document.getElementById("pick-q") : rows[i - 1]).focus(); return; }
+  }
   if (e.key !== "Escape") return;
-  if (pendingDelete) closeDialog(); else if (viewing) closeRecipe();
+  if (pendingDelete) closeDialog(); else if (picking) closePicker(); else if (viewing) closeRecipe();
 });
+
+// Meal search: a slot's Search button opens this panel. Typing filters by name, cuisine or ingredient; the slot's
+// usual choices (meal type, car-friendly Fri–Sun breakfasts, cuisine) come first, and other matches are listed
+// below them. Picking goes through the slot's own dropdown, so leftovers and big batches follow as usual.
+let picking = null, pickReturn = null;
+function openPicker(d, s, from) {
+  picking = { d, s, q: "" }; pickReturn = from || null;
+  renderPicker();
+  document.getElementById("pick-q")?.focus();
+}
+function closePicker() {
+  picking = null; renderPicker();
+  if (pickReturn && pickReturn.isConnected) pickReturn.focus();
+}
+function pickMatches() {
+  const { d, s } = picking, q = picking.q.trim().toLowerCase();
+  const usual = new Set(slotIds(d, s));
+  const hit = r => !q || r.name.toLowerCase().includes(q) || r.cuisine.toLowerCase().includes(q) || r.ingredients.some(i => i.item.includes(q));
+  // Name matches first, then cuisine or ingredient matches, each A–Z.
+  const rank = r => !q || r.name.toLowerCase().includes(q) ? 0 : 1;
+  const all = Object.values(state.recipes).filter(hit).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  return { main: all.filter(r => usual.has(r.id)), other: q ? all.filter(r => !usual.has(r.id)) : [] };
+}
+function renderPicker() {
+  const el = document.getElementById("picker");
+  if (!picking) { el.innerHTML = ""; if (!viewing) document.body.style.overflow = ""; return; }
+  document.body.style.overflow = "hidden";
+  const { d, s } = picking, label = SLOTS.find(x => x[0] === s)[1];
+  const cur = state.plan.days[d].slots[s];
+  el.innerHTML = `<div class="sheet-back pick-back" data-action="close-pick">
+    <div class="sheet pick" role="dialog" aria-modal="true" aria-labelledby="pick-title">
+      <div class="sheet-head"><h2 id="pick-title">${DAYS[d]} ${label.toLowerCase()}</h2>
+        <button class="close" data-action="close-pick" aria-label="Close search">×</button></div>
+      <input id="pick-q" type="search" placeholder="Search by name, cuisine or ingredient" aria-label="Search meals" aria-controls="pick-list" autocomplete="off" value="${esc(picking.q)}">
+      <div id="pick-list" class="pick-list" role="listbox" aria-label="Matching meals"></div>
+      ${cur ? `<button class="btn ghost small" data-action="pick-clear">Clear this meal</button>` : ""}
+    </div></div>`;
+  renderPickList();
+}
+function renderPickList() {
+  const box = document.getElementById("pick-list"); if (!box || !picking) return;
+  const { main, other } = pickMatches();
+  const cur = state.plan.days[picking.d].slots[picking.s];
+  const row = r => `<button class="pick-row${cur && cur.id === r.id ? " on" : ""}" role="option" aria-selected="${!!(cur && cur.id === r.id)}" data-action="pick-one" data-id="${esc(r.id)}">
+      <span class="pn">${esc(r.name)}</span><span class="pm">${esc(r.cuisine)} · ${Math.round(r.cal)} kcal · ${Math.round(r.p)}P ${Math.round(r.c)}C ${Math.round(r.f)}F</span></button>`;
+  box.innerHTML = (main.length ? main.map(row).join("") : `<p class="muted">${picking.q ? "No usual choices match." : "No recipes fit this meal yet."}</p>`)
+    + (other.length ? `<p class="pick-sep">Other recipes that match (not usually ${SLOTS.find(x => x[0] === picking.s)[1].toLowerCase()}${picking.s === "breakfast" && isCarGroup(bfGroup(picking.d)) && linkMode().bf ? " or not car-friendly" : ""})</p>${other.map(row).join("")}` : "");
+}
+// Fill the slot by setting its dropdown, adding the recipe as an option first when it isn't one of the usual choices.
+function pickRecipe(id) {
+  const { d, s } = picking, sel = document.getElementById(`sl-${d}-${s}`);
+  if (!sel) return;
+  if (id && ![...sel.options].some(o => o.value === id)) { const o = document.createElement("option"); o.value = id; o.textContent = state.recipes[id].name; sel.appendChild(o); }
+  sel.value = id;
+  picking = null; renderPicker();
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+  const name = id ? state.recipes[id].name : "";
+  toast(id ? `Added ${name} and pinned it.` : "Cleared this meal.");
+  document.getElementById(`sl-${d}-${s}`)?.focus();
+}
 
 // Deleting a recipe takes two steps: the Delete button opens this dialog, and only its Delete recipe button deletes.
 let pendingDelete = null, deleteReturn = null;
@@ -2099,6 +2185,10 @@ document.addEventListener("click", async e => {
   if (a === "close-sheet") { if (e.target === b || b.id === "sheet-close") closeRecipe(); return; }
   if (a === "cancel-del") { if (e.target === b || b.tagName === "BUTTON") closeDialog(); return; }
   if (a === "view") return openRecipe(b.dataset.id, b.dataset.x, b);
+  if (a === "pick") return openPicker(+b.dataset.d, b.dataset.s, b);
+  if (a === "close-pick") { if (e.target === b || b.classList.contains("close")) closePicker(); return; }
+  if (a === "pick-one") return pickRecipe(b.dataset.id);
+  if (a === "pick-clear") return pickRecipe("");
   if (a === "sheet-people") { if (viewing) { viewing.people = Math.min(20, Math.max(1, (viewing.people ?? household()) + d)); renderSheetIngredients(); } return; }
   if (a === "copy-mfp") { const r = state.recipes[b.dataset.id]; if (r) copyText(mfpLine(r, b.dataset.x ? +b.dataset.x : null), "Copied. Paste into MyFitnessPal Quick Add."); return; }
   if (a === "copy-mfp-day") return copyText(mfpDayText(d), `Copied ${DAYS[d]}'s meals for MyFitnessPal.`);
@@ -2288,6 +2378,7 @@ document.addEventListener("change", e => {
   if (t.id === "rsort") { state.rsort = t.value; lsSet("mpp.rsort", t.value); return render(); }
 });
 document.addEventListener("input", e => {
+  if (e.target.id === "pick-q" && picking) { picking.q = e.target.value; renderPickList(); return; }
   if (e.target.id === "rsearch") {
     state.rsearch = e.target.value;
     const pos = e.target.selectionStart;
