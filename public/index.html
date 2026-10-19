@@ -164,6 +164,7 @@ nav.tabs .count { font-family: var(--font-data); font-size: 12px; color: var(--m
 .gitem .used { grid-column: 2 / -1; font-size: 12px; color: var(--muted); }
 .gitem .amt { font-family: var(--font-data); font-size: 13px; text-align: right; }
 .gitem.done .name, .gitem.done .amt { text-decoration: line-through; color: var(--muted); }
+.checked-off { opacity: .75; }
 .prep li { padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .prep ul { list-style: none; margin: 0; padding: 0; }
 .bigstat { font-family: var(--font-display); font-size: 40px; font-weight: 800; line-height: 1; }
@@ -1744,16 +1745,21 @@ function viewGroceries() {
   const keyId = k => esc(k.replace(/\W+/g, "-"));
   // One list per shopping trip; a trip's check marks are kept under its own key prefix.
   const trips = shoppingTrips();
-  const groupsFor = (list0, pre) => CATS.map(cat => {
-    const list = list0.filter(i => !i.have && (CATS.includes(i.category) ? i.category : "Other") === cat).sort((a, b) => a.name.localeCompare(b.name));
-    if (!list.length) return "";
-    return `<div class="cat"><h3><span>${esc(cat)}</span><span class="num">${list.length}</span></h3>
-      ${list.map(g => { const ck = pre + g.key; return `<div class="gitem ${checked[ck] ? "done" : ""}">
+  // Unchecked items by store section; checked ones drop to a "Checked off" group at the bottom of their list.
+  const gitem = (g, pre) => { const ck = pre + g.key; return `<div class="gitem ${checked[ck] ? "done" : ""}">
         <input type="checkbox" id="g-${keyId(ck)}" data-gkey="${esc(ck)}" ${checked[ck] ? "checked" : ""}>
         <label class="name" for="g-${keyId(ck)}">${esc(g.name)}</label><span class="amt">${(p => p ? `${esc(p.main)}${p.detail ? `<br><span class="muted" style="font-size:11px">${esc(p.detail)}</span>` : ""}` : esc(amountText(g)))(purchaseText(g))}</span>
         <button class="have-btn" data-action="have" data-key="${esc(g.key)}" title="Hide this from future lists until you add it back">I already have this</button>
-        <span class="used">${esc([...g.used].join(", "))}</span></div>`; }).join("")}</div>`;
-  }).join("");
+        <span class="used">${esc([...g.used].join(", "))}</span></div>`; };
+  const groupsFor = (list0, pre) => {
+    const open = list0.filter(i => !i.have && !checked[pre + i.key]), done = list0.filter(i => !i.have && checked[pre + i.key]);
+    const cats = CATS.map(cat => {
+      const list = open.filter(i => (CATS.includes(i.category) ? i.category : "Other") === cat).sort((a, b) => a.name.localeCompare(b.name));
+      return list.length ? `<div class="cat"><h3><span>${esc(cat)}</span><span class="num">${list.length}</span></h3>${list.map(g => gitem(g, pre)).join("")}</div>` : "";
+    }).join("");
+    const doneHtml = done.length ? `<div class="cat checked-off"><h3><span>Checked off</span><span class="num">${done.length}</span></h3>${done.sort((a, b) => a.name.localeCompare(b.name)).map(g => gitem(g, pre)).join("")}</div>` : "";
+    return (cats || (done.length ? `<p class="muted">Everything on this list is checked off.</p>` : "")) + doneHtml;
+  };
   const k2 = S.trips === 2 ? tripSplitDay() : 0;
   const tripCtl = `<div class="row trip-ctl"><span class="label">Shopping trips</span>
       <div class="seg" role="group" aria-label="Shopping trips a week">${[1, 2].map(n => `<button data-action="trips" data-n="${n}" aria-pressed="${(S.trips || 1) === n}">${n === 1 ? "Once a week" : "Twice a week"}</button>`).join("")}</div>
@@ -2533,8 +2539,13 @@ document.addEventListener("change", e => {
   if (t.matches("input[data-gkey]")) {
     state.plan.checked = state.plan.checked || {};
     if (t.checked) state.plan.checked[t.dataset.gkey] = true; else delete state.plan.checked[t.dataset.gkey];
-    t.closest(".gitem").classList.toggle("done", t.checked);
-    return savePlan();
+    // The item moves (to "Checked off", or back to its section); keep the scroll and put focus on the item that
+    // takes its place, or on the moved item when it was the last one.
+    const row = t.closest(".gitem"), next = (row.nextElementSibling && row.nextElementSibling.querySelector("input[data-gkey]")) || null;
+    const nextId = next && next.id, y = window.scrollY;
+    savePlan(); render(); window.scrollTo(0, y);
+    (nextId && document.getElementById(nextId) || document.getElementById(t.id))?.focus({ preventScroll: true });
+    return;
   }
   const S = state.settings;
   if (t.matches("[data-target]")) { const v = parseFloat(t.value); if (v >= 0) { S.targets[t.dataset.target] = v; saveSettings(); render(); } return; }
