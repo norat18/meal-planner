@@ -210,6 +210,14 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .linkish { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
 .linkish:hover { text-decoration-color: var(--accent); color: var(--accent); }
 .slot-actions { display: flex; gap: 2px; }
+.extra { border-top: 1px dashed var(--line); padding-top: 4px; display: grid; gap: 2px; }
+.extra-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.extra .en { font-weight: 600; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.extra-meta { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); font-family: var(--font-data); }
+.extra-meta .num { flex: 1; }
+.extra-meta .step { font-size: 15px; min-width: 28px; min-height: 28px; border: 1px solid var(--line); }
+.meal-total { font-size: 12px; font-weight: 600; color: var(--ink); font-family: var(--font-data); }
+.add-dish { justify-self: start; color: var(--accent); }
 .portion { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .portion .lock { font-size: 15px; min-width: 28px; min-height: 28px; border: 1px solid var(--line); }
 .portion b { color: var(--ink); min-width: 36px; text-align: center; font-weight: 600; }
@@ -679,14 +687,15 @@ function portionSteps() {
 /* ---------- portion solver ---------- */
 // Picks a serving multiplier per meal so the day lands inside every macro tolerance band.
 // Picks a serving multiplier per meal so the day lands inside every macro tolerance band and reaches the fiber minimum.
-function solve(recs) {
+// fixed = [cal, p, c, f, fib] already eaten that day at set portions (extra dishes), counted but never resized.
+function solve(recs, fixed = [0, 0, 0, 0, 0]) {
   const S = state.settings, mOn = targetsOn(), F = fiberGoal();
-  const fibTot = x => recs.reduce((a, r, i) => a + fib(r) * x[i], 0);
+  const fibTot = x => fixed[4] + recs.reduce((a, r, i) => a + fib(r) * x[i], 0);
   // Fiber is a minimum: short of it counts against the day, over it never does. Half a gram of rounding is allowed.
   const fibShort = t => F > 0 ? Math.max(0, F - 0.5 - t) / F : 0;
   if (!mOn) {
     const x = recs.map(() => 1), t = fibTot(x), sh = fibShort(t);
-    return { x, err: 0, tot: [0, 0, 0, 0, t], dev: [0, 0, 0, 0, sh], miss: sh * 10, feasible: sh === 0 };
+    return { x, err: 0, tot: [fixed[0], fixed[1], fixed[2], fixed[3], t], dev: [0, 0, 0, 0, sh], miss: sh * 10, feasible: sh === 0 };
   }
   const T = [S.targets.cal, S.targets.p, S.targets.c, S.targets.f];
   const TL = [S.tol.cal, S.tol.p, S.tol.c, S.tol.f].map(v => Math.max(v, 1) / 100);
@@ -695,8 +704,8 @@ function solve(recs) {
   const P = portionSteps(), n = recs.length;
   const sumCal = M.reduce((a, m) => a + m[0], 0) || 1;
   const nearest = v => P.reduce((b, p) => Math.abs(p - v) < Math.abs(b - v) ? p : b, P[0]);
-  const x = Array(n).fill(nearest(T[0] / sumCal));
-  const tot = [0, 0, 0, 0, 0];
+  const x = Array(n).fill(nearest(Math.max(0, T[0] - fixed[0]) / sumCal));
+  const tot = fixed.slice();
   for (let i = 0; i < n; i++) for (let k = 0; k < 5; k++) tot[k] += x[i] * M[i][k];
   const err = () => {
     let e = 0;
@@ -783,7 +792,7 @@ function relink(oldRuns) {
     const src = was && first && state.recipes[first.id] ? first : null;
     r.slots.forEach(([d, s]) => {
       const c = P[d].slots[s];
-      if (src) P[d].slots[s] = { id: src.id, x: c && c.id === src.id ? c.x || 1 : 1, locked: !!src.locked };
+      if (src) P[d].slots[s] = { id: src.id, x: c && c.id === src.id ? c.x || 1 : 1, locked: !!src.locked, ...(slotExtras(src).length ? { extras: slotExtras(src).map(e => ({ ...e })) } : {}) };
       else if (!was) delete P[d].slots[s];
     });
   }
@@ -873,12 +882,12 @@ function fillWeek(mode, days, opts = {}) {
   const prev = vars.map(v => v.current);
   const slotVar = DAYS.map(() => ({}));
   vars.forEach((v, i) => v.slots.forEach(([d, s]) => { slotVar[d][s] = i; }));
-  const memo = new Map();
+  const memo = new Map(), fixedOf = DAYS.map((_, d) => dayFixed(d));
   const daySolve = (vals, d) => {
     const ids = act.map(s => vals[slotVar[d][s]]);
     if (ids.some(id => !id)) return null;
-    const k = ids.join("|");
-    if (!memo.has(k)) memo.set(k, solve(ids.map(id => state.recipes[id])));
+    const k = fixedOf[d].join(",") + "|" + ids.join("|");
+    if (!memo.has(k)) memo.set(k, solve(ids.map(id => state.recipes[id]), fixedOf[d]));
     return memo.get(k);
   };
   const lean = mode !== "random", withTargets = goalsOn(), have = haveSet();
@@ -943,7 +952,7 @@ function fillWeek(mode, days, opts = {}) {
     if (!v.free) return;
     v.slots.forEach(([d, s]) => {
       const p = state.plan.days[d].slots[s];
-      state.plan.days[d].slots[s] = { id: best[i], x: 1, locked: !!(p && p.locked && p.id === best[i]) };
+      state.plan.days[d].slots[s] = { id: best[i], x: 1, locked: !!(p && p.locked && p.id === best[i]), ...(slotExtras(p).length ? { extras: slotExtras(p) } : {}) };
     });
   });
   touched.forEach(d => rebalance(d));
@@ -981,12 +990,26 @@ function dayMiss(d) {
   const diff = Math.round(st.tot[worst] - S.targets[worst]);
   return { k: worst, name: names[worst], text: `${names[worst]} ${diff > 0 ? "over" : "under"} by ${Math.abs(diff)}${worst === "cal" ? " kcal" : " g"} (${Math.abs(Math.round(st.dev[worst] * 100))}%)` };
 }
+/* ---------- extra dishes ---------- */
+// A meal can hold more than one dish: slot.extras = [{ id, x }] beside its main dish (slot.id). Extra dishes keep the
+// portion you give them; they count toward the day, the grocery list and MyFitnessPal, and the planner sizes the
+// main dishes around them.
+function slotExtras(c) { return c && Array.isArray(c.extras) ? c.extras.filter(e => state.recipes[e.id]) : []; }
+// [cal, p, c, f, fib] of a day's extra dishes.
+function dayFixed(d) {
+  const t = [0, 0, 0, 0, 0], day = state.plan.days[d];
+  for (const s of activeSlots()) for (const e of slotExtras(day.slots[s])) {
+    const r = state.recipes[e.id], x = e.x || 1;
+    t[0] += r.cal * x; t[1] += r.p * x; t[2] += r.c * x; t[3] += r.f * x; t[4] += fib(r) * x;
+  }
+  return t;
+}
 function rebalance(d) {
   if (state.settings.manual) return; // Manual mode keeps the portions you set
   const day = state.plan.days[d], act = activeSlots();
   const filled = act.filter(s => day.slots[s] && state.recipes[day.slots[s].id]);
   if (filled.length < act.length) return;
-  const s = solve(filled.map(sl => state.recipes[day.slots[sl].id]));
+  const s = solve(filled.map(sl => state.recipes[day.slots[sl].id]), dayFixed(d));
   filled.forEach((sl, i) => { day.slots[sl].x = s.x[i]; });
 }
 function dayStatus(d) {
@@ -998,6 +1021,11 @@ function dayStatus(d) {
     filled++;
     for (const k of ["cal","p","c","f"]) tot[k] += r[k] * (c.x || 1);
     tot.fib += fib(r) * (c.x || 1);
+    for (const e of slotExtras(c)) {
+      const er = state.recipes[e.id];
+      for (const k of ["cal","p","c","f"]) tot[k] += er[k] * (e.x || 1);
+      tot.fib += fib(er) * (e.x || 1);
+    }
   }
   const dev = {}; let feasible = true;
   const on = targetsOn();
@@ -1018,23 +1046,25 @@ function groceries() {
   const items = new Map(), cook = new Map(), H = household(), have = haveSet();
   state.plan.days.forEach((day, d) => {
     for (const s of activeSlots()) {
-      const c = day.slots[s], r = c && state.recipes[c.id];
-      if (!r) continue;
-      const x = c.x || 1;
-      const ck = cook.get(r.id) || { r, portions: 0, days: new Set(), meals: [] };
-      ck.portions += x * H; ck.days.add(DAYS[d].slice(0, 3)); ck.meals.push([d, s]); cook.set(r.id, ck);
-      const f = x * H / (r.servings || 1);
-      for (const ing of r.ingredients) {
-        const k = itemKey(ing.item);
-        const g = items.get(k) || { key: k, name: ing.item, category: ing.category || "Other", amounts: {}, metric: {}, used: new Set(), untracked: false, have: have.has(k) };
-        g.used.add(r.name);
-        if (ing.qty == null || isNaN(ing.qty)) g.untracked = true;
-        else {
-          const u = unitInfo(ing.unit);
-          g.amounts[u.family] = (g.amounts[u.family] || 0) + ing.qty * u.factor * f;
-          if (u.metric != null) g.metric[u.family] = (g.metric[u.family] ?? true) && u.metric;
+      const c = day.slots[s];
+      if (!c || !state.recipes[c.id]) continue;
+      for (const { id, x: dx } of [{ id: c.id, x: c.x }, ...slotExtras(c)]) {
+        const r = state.recipes[id], x = dx || 1;
+        const ck = cook.get(r.id) || { r, portions: 0, days: new Set(), meals: [] };
+        ck.portions += x * H; ck.days.add(DAYS[d].slice(0, 3)); ck.meals.push([d, s]); cook.set(r.id, ck);
+        const f = x * H / (r.servings || 1);
+        for (const ing of r.ingredients) {
+          const k = itemKey(ing.item);
+          const g = items.get(k) || { key: k, name: ing.item, category: ing.category || "Other", amounts: {}, metric: {}, used: new Set(), untracked: false, have: have.has(k) };
+          g.used.add(r.name);
+          if (ing.qty == null || isNaN(ing.qty)) g.untracked = true;
+          else {
+            const u = unitInfo(ing.unit);
+            g.amounts[u.family] = (g.amounts[u.family] || 0) + ing.qty * u.factor * f;
+            if (u.metric != null) g.metric[u.family] = (g.metric[u.family] ?? true) && u.metric;
+          }
+          items.set(k, g);
         }
-        items.set(k, g);
       }
     }
   });
@@ -1586,6 +1616,21 @@ function slotCell(d, s) {
   const x = c ? c.x || 1 : 1, manual = !!state.settings.manual;
   const meta = r ? (on || manual ? `<b>×${x}</b> serving · ${Math.round(r.cal * x)} kcal · ${Math.round(r.p * x)}P ${Math.round(r.c * x)}C ${Math.round(r.f * x)}F${r.fib != null ? ` ${Math.round(r.fib * x)}Fb` : ""}${r.estimated || r.fibEstimated ? ` <span class="est" title="Macros are estimates">est.</span>` : ""}` : `${esc(r.cuisine)}`)
     : (c && !r ? "Recipe was deleted" : "Choose a meal");
+  // Extra dishes: each with its own portion, a link to its recipe and a remove button; the meal's total when there are any.
+  const extras = r ? slotExtras(c) : [], ro = state.readOnly;
+  const macroLine = (o, xx) => `${Math.round(o.cal * xx)} kcal · ${Math.round(o.p * xx)}P ${Math.round(o.c * xx)}C ${Math.round(o.f * xx)}F`;
+  let extrasHtml = extras.map(e => {
+    const er = state.recipes[e.id], ex = e.x || 1, ei = esc(e.id);
+    return `<div class="extra"><div class="extra-top"><span class="en">+ ${esc(er.name)}</span>
+      <span class="slot-actions"><button class="lock" data-action="view" data-id="${ei}" data-x="${ex}" title="Ingredients and instructions">Recipe</button>${ro ? "" : `<button class="lock" data-action="extra-rm" data-d="${d}" data-s="${s}" data-id="${ei}" aria-label="Remove ${esc(er.name)}">Remove</button>`}</span></div>
+      <div class="extra-meta"><span class="num">×${ex} · ${macroLine(er, ex)}</span>${ro ? "" : `<button class="lock step" data-action="extra-x" data-d="${d}" data-s="${s}" data-id="${ei}" data-dx="-0.25" aria-label="Smaller portion of ${esc(er.name)}" ${ex <= 0.25 ? "disabled" : ""}>−</button><button class="lock step" data-action="extra-x" data-d="${d}" data-s="${s}" data-id="${ei}" data-dx="0.25" aria-label="Larger portion of ${esc(er.name)}" ${ex >= 4 ? "disabled" : ""}>+</button>`}</div></div>`;
+  }).join("");
+  if (extras.length) {
+    const tot = { cal: r.cal * x, p: r.p * x, c: r.c * x, f: r.f * x };
+    extras.forEach(e => { const er = state.recipes[e.id]; for (const k in tot) tot[k] += er[k] * (e.x || 1); });
+    extrasHtml += `<div class="meal-total num">Meal: ${macroLine(tot, 1)}</div>`;
+  }
+  if (r && !ro) extrasHtml += `<button class="lock add-dish" data-action="add-dish" data-d="${d}" data-s="${s}">+ Add a dish</button>`;
   // Cooking signal (share of plan cooked) and a 1–5 rating, on the slot where the meal is cooked.
   const key = `${d}-${s}`, ck = (state.plan.cooked || {})[key];
   const cooked = r && isCookSlot(d, s) ? `<div class="cooked"><label><input type="checkbox" data-cooked="${key}" ${ck ? "checked" : ""}> Cooked</label>${ck ? `<select data-rating="${key}" aria-label="Rate this meal"><option value="">Rate</option>${[5,4,3,2,1].map(n => `<option value="${n}" ${ck.rating === n ? "selected" : ""}>${"★".repeat(n)}</option>`).join("")}</select>` : ""}</div>` : "";
@@ -1596,7 +1641,7 @@ function slotCell(d, s) {
     <select id="sl-${d}-${s}" data-d="${d}" data-s="${s}" aria-label="${DAYS[d]} ${label}">
       <option value="">— Empty —</option>${opts}
     </select>
-    <div class="slot-meta">${meta}</div>${manual && r && !state.readOnly ? `<div class="portion" role="group" aria-label="${DAYS[d]} ${label} portion"><span>Portion</span><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="-0.25" aria-label="Smaller portion" ${x <= 0.25 ? "disabled" : ""}>−</button><b class="num">×${x}</b><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="0.25" aria-label="Larger portion" ${x >= 4 ? "disabled" : ""}>+</button></div>` : ""}${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${batchSel}${cooked}
+    <div class="slot-meta">${meta}</div>${extrasHtml}${manual && r && !state.readOnly ? `<div class="portion" role="group" aria-label="${DAYS[d]} ${label} portion"><span>Portion</span><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="-0.25" aria-label="Smaller portion" ${x <= 0.25 ? "disabled" : ""}>−</button><b class="num">×${x}</b><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="0.25" aria-label="Larger portion" ${x >= 4 ? "disabled" : ""}>+</button></div>` : ""}${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${batchSel}${cooked}
   </div>`;
 }
 
@@ -1998,6 +2043,7 @@ function mfpDayText(d) {
   for (const s of activeSlots()) {
     const c = day.slots[s], r = c && state.recipes[c.id];
     if (r) lines.push(mfpLine(r, c.x || 1, SLOTS.find(x => x[0] === s)[1]));
+    if (r) for (const e of slotExtras(c)) lines.push(mfpLine(state.recipes[e.id], e.x || 1, SLOTS.find(x => x[0] === s)[1] + " (extra dish)"));
   }
   const st = dayStatus(d);
   lines.push(`Total: Calories ${Math.round(st.tot.cal)} · Carbs ${Math.round(st.tot.c)} g · Fat ${Math.round(st.tot.f)} g · Protein ${Math.round(st.tot.p)} g`);
@@ -2019,8 +2065,8 @@ document.addEventListener("keydown", e => {
 // usual choices (meal type, car-friendly Fri–Sun breakfasts, cuisine) come first, and other matches are listed
 // below them. Picking goes through the slot's own dropdown, so leftovers and big batches follow as usual.
 let picking = null, pickReturn = null;
-function openPicker(d, s, from) {
-  picking = { d, s, q: "" }; pickReturn = from || null;
+function openPicker(d, s, from, add) {
+  picking = { d, s, q: "", add: !!add }; pickReturn = from || null;
   renderPicker();
   document.getElementById("pick-q")?.focus();
 }
@@ -2030,12 +2076,14 @@ function closePicker() {
 }
 function pickMatches() {
   const { d, s } = picking, q = picking.q.trim().toLowerCase();
-  const usual = new Set(slotIds(d, s));
+  // Adding a dish offers every recipe not already in the meal.
+  const c = state.plan.days[d].slots[s], inMeal = new Set(c ? [c.id, ...slotExtras(c).map(e => e.id)] : []);
+  const usual = new Set(picking.add ? Object.keys(state.recipes).filter(id => !inMeal.has(id)) : slotIds(d, s));
   const hit = r => !q || r.name.toLowerCase().includes(q) || r.cuisine.toLowerCase().includes(q) || r.ingredients.some(i => i.item.includes(q));
   // Name matches first, then cuisine or ingredient matches, each A–Z.
   const rank = r => !q || r.name.toLowerCase().includes(q) ? 0 : 1;
   const all = Object.values(state.recipes).filter(hit).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-  return { main: all.filter(r => usual.has(r.id)), other: q ? all.filter(r => !usual.has(r.id)) : [] };
+  return { main: all.filter(r => usual.has(r.id)), other: q && !picking.add ? all.filter(r => !usual.has(r.id)) : [] };
 }
 function renderPicker() {
   const el = document.getElementById("picker");
@@ -2045,11 +2093,11 @@ function renderPicker() {
   const cur = state.plan.days[d].slots[s];
   el.innerHTML = `<div class="sheet-back pick-back" data-action="close-pick">
     <div class="sheet pick" role="dialog" aria-modal="true" aria-labelledby="pick-title">
-      <div class="sheet-head"><h2 id="pick-title">${DAYS[d]} ${label.toLowerCase()}</h2>
+      <div class="sheet-head"><h2 id="pick-title">${picking.add ? `Add a dish to ${DAYS[d]} ${label.toLowerCase()}` : `${DAYS[d]} ${label.toLowerCase()}`}</h2>
         <button class="close" data-action="close-pick" aria-label="Close search">×</button></div>
       <input id="pick-q" type="search" placeholder="Search by name, cuisine or ingredient" aria-label="Search meals" aria-controls="pick-list" autocomplete="off" value="${esc(picking.q)}">
       <div id="pick-list" class="pick-list" role="listbox" aria-label="Matching meals"></div>
-      ${cur ? `<button class="btn ghost small" data-action="pick-clear">Clear this meal</button>` : ""}
+      ${cur && !picking.add ? `<button class="btn ghost small" data-action="pick-clear">Clear this meal</button>` : ""}
     </div></div>`;
   renderPickList();
 }
@@ -2064,6 +2112,7 @@ function renderPickList() {
 }
 // Fill the slot by setting its dropdown, adding the recipe as an option first when it isn't one of the usual choices.
 function pickRecipe(id) {
+  if (picking.add) return addDish(picking.d, picking.s, id);
   const { d, s } = picking, sel = document.getElementById(`sl-${d}-${s}`);
   if (!sel) return;
   if (id && ![...sel.options].some(o => o.value === id)) { const o = document.createElement("option"); o.value = id; o.textContent = state.recipes[id].name; sel.appendChild(o); }
@@ -2073,6 +2122,31 @@ function pickRecipe(id) {
   const name = id ? state.recipes[id].name : "";
   toast(id ? `Added ${name} and pinned it.` : "Cleared this meal.");
   document.getElementById(`sl-${d}-${s}`)?.focus();
+}
+
+// Extra dishes follow the meal's leftovers and repeats: adding or removing one changes every linked slot.
+function addDish(d, s, id) {
+  picking = null; renderPicker();
+  const linked = linkedSlots(d, s);
+  for (const [ld, ls] of linked) {
+    const c = state.plan.days[ld].slots[ls];
+    if (!c || c.id === id || slotExtras(c).some(e => e.id === id)) continue;
+    c.extras = [...slotExtras(c), { id, x: 1 }];
+  }
+  new Set(linked.map(([ld]) => ld)).forEach(ld => rebalance(ld));
+  savePlan(); render();
+  toast(`Added ${state.recipes[id].name} to ${DAYS[d]} ${SLOTS.find(x => x[0] === s)[1].toLowerCase()}.`);
+  document.querySelector(`[data-action="add-dish"][data-d="${d}"][data-s="${s}"]`)?.focus();
+}
+function removeDish(d, s, id) {
+  const linked = linkedSlots(d, s);
+  for (const [ld, ls] of linked) {
+    const c = state.plan.days[ld].slots[ls]; if (!c) continue;
+    const rest = slotExtras(c).filter(e => e.id !== id);
+    if (rest.length) c.extras = rest; else delete c.extras;
+  }
+  new Set(linked.map(([ld]) => ld)).forEach(ld => rebalance(ld));
+  savePlan(); render();
 }
 
 // Deleting a recipe takes two steps: the Delete button opens this dialog, and only its Delete recipe button deletes.
@@ -2205,6 +2279,15 @@ document.addEventListener("click", async e => {
   }
   if (a === "close-pick") { if (e.target === b || b.classList.contains("close")) closePicker(); return; }
   if (a === "pick-one") return pickRecipe(b.dataset.id);
+  if (a === "add-dish") return openPicker(+b.dataset.d, b.dataset.s, b, true);
+  if (a === "extra-rm") return removeDish(+b.dataset.d, b.dataset.s, b.dataset.id);
+  // An extra dish's portion steps by a quarter serving, in this slot only; the planner resizes the main dishes around it.
+  if (a === "extra-x") {
+    const d = +b.dataset.d, c = state.plan.days[d].slots[b.dataset.s], e = slotExtras(c).find(e => e.id === b.dataset.id); if (!e) return;
+    e.x = Math.min(4, Math.max(0.25, Math.round(((e.x || 1) + +b.dataset.dx) * 4) / 4));
+    rebalance(d); savePlan(); render();
+    document.querySelector(`[data-action="extra-x"][data-d="${d}"][data-s="${b.dataset.s}"][data-id="${b.dataset.id}"][data-dx="${b.dataset.dx}"]`)?.focus(); return;
+  }
   if (a === "pick-clear") return pickRecipe("");
   if (a === "sheet-people") { if (viewing) { viewing.people = Math.min(20, Math.max(1, (viewing.people ?? household()) + d)); renderSheetIngredients(); } return; }
   if (a === "copy-mfp") { const r = state.recipes[b.dataset.id]; if (r) copyText(mfpLine(r, b.dataset.x ? +b.dataset.x : null), "Copied. Paste into MyFitnessPal Quick Add."); return; }
@@ -2322,7 +2405,8 @@ document.addEventListener("change", e => {
     const d = +t.dataset.d, s = t.dataset.s, day = state.plan.days[d];
     const linked = linkedSlots(d, s);
     for (const [ld, ls] of linked) {
-      if (t.value) state.plan.days[ld].slots[ls] = { id: t.value, x: 1, locked: true }; else delete state.plan.days[ld].slots[ls];
+      const ex = slotExtras(state.plan.days[ld].slots[ls]);
+      if (t.value) state.plan.days[ld].slots[ls] = { id: t.value, x: 1, locked: true, ...(ex.length ? { extras: ex } : {}) }; else delete state.plan.days[ld].slots[ls];
     }
     new Set(linked.map(([ld]) => ld)).forEach(ld => rebalance(ld));
     savePlan(); return render();
