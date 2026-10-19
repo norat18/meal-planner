@@ -224,6 +224,9 @@ pre.sample { background: var(--bg); border: 1px solid var(--line); border-radius
 .extra-meta .step { font-size: 15px; min-width: 28px; min-height: 28px; border: 1px solid var(--line); }
 .meal-total { font-size: 12px; font-weight: 600; color: var(--ink); font-family: var(--font-data); }
 .add-dish { justify-self: start; color: var(--accent); }
+.make { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.make .step { font-size: 15px; min-width: 28px; min-height: 28px; border: 1px solid var(--line); }
+.make b { color: var(--ink); font-weight: 600; min-width: 70px; text-align: center; }
 .portion { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .portion .lock { font-size: 15px; min-width: 28px; min-height: 28px; border: 1px solid var(--line); }
 .portion b { color: var(--ink); min-width: 36px; text-align: center; font-weight: 600; }
@@ -1052,34 +1055,55 @@ function household() { return Math.max(1, Math.round(+state.settings.household |
 // Amounts add up within a unit family; different families show side by side ("2 cloves + 1 tbsp").
 // keep(ing, cookDay) limits the list to some ingredients, e.g. one shopping trip's. A meal's ingredients are needed on
 // the day it's cooked, which for leftovers and repeats is the first day of the run.
-function groceries(keep) {
-  const items = new Map(), cook = new Map(), H = household(), have = haveSet();
+// How much gets cooked: each dish on a cooking slot makes enough for every meal it covers (its portion × household on
+// each linked slot), unless "Cook N servings" (dish.make) says otherwise, e.g. extra for meal prep.
+function cookRuns() {
+  const runs = new Map(), H = household();
   state.plan.days.forEach((day, d) => {
     for (const s of activeSlots()) {
       const c = day.slots[s];
       if (!c || !state.recipes[c.id]) continue;
-      const cookDay = linkedSlots(d, s)[0][0];
-      for (const { id, x: dx } of [{ id: c.id, x: c.x }, ...slotExtras(c)]) {
-        const r = state.recipes[id], x = dx || 1;
-        const ck = cook.get(r.id) || { r, portions: 0, days: new Set(), meals: [] };
-        ck.portions += x * H; ck.days.add(DAYS[d].slice(0, 3)); ck.meals.push([d, s]); cook.set(r.id, ck);
-        const f = x * H / (r.servings || 1);
-        for (const ing of r.ingredients) {
-          if (keep && !keep(ing, cookDay)) continue;
-          const k = itemKey(ing.item);
-          const g = items.get(k) || { key: k, name: ing.item, category: ing.category || "Other", amounts: {}, metric: {}, used: new Set(), untracked: false, have: have.has(k) };
-          g.used.add(r.name);
-          if (ing.qty == null || isNaN(ing.qty)) g.untracked = true;
-          else {
-            const u = unitInfo(ing.unit);
-            g.amounts[u.family] = (g.amounts[u.family] || 0) + ing.qty * u.factor * f;
-            if (u.metric != null) g.metric[u.family] = (g.metric[u.family] ?? true) && u.metric;
-          }
-          items.set(k, g);
-        }
+      const at = linkedSlots(d, s)[0], isCook = at[0] === d && at[1] === s;
+      for (const dish of [c, ...slotExtras(c)]) {
+        const key = at.join() + "|" + dish.id;
+        const run = runs.get(key) || { r: state.recipes[dish.id], auto: 0, make: null, cookDay: at[0], days: new Set(), meals: [] };
+        run.auto += (dish.x || 1) * H; run.days.add(DAYS[d].slice(0, 3)); run.meals.push([d, s]);
+        if (isCook && dish.make > 0) run.make = dish.make;
+        runs.set(key, run);
       }
     }
   });
+  return [...runs.values()].map(run => ({ ...run, portions: run.make ?? run.auto }));
+}
+// Servings a dish on [d, s] makes by default (before any "Cook N servings" override).
+function autoMake(d, s, id) {
+  return linkedSlots(d, s).reduce((a, [ld, ls]) => {
+    const c = state.plan.days[ld].slots[ls];
+    const dish = c && (c.id === id ? c : slotExtras(c).find(e => e.id === id));
+    return a + (dish ? (dish.x || 1) * household() : 0);
+  }, 0) || household();
+}
+function groceries(keep) {
+  const items = new Map(), cook = new Map(), have = haveSet();
+  for (const run of cookRuns()) {
+    const r = run.r;
+    const ck = cook.get(r.id) || { r, portions: 0, days: new Set(), meals: [] };
+    ck.portions += run.portions; run.days.forEach(x => ck.days.add(x)); ck.meals.push(...run.meals); cook.set(r.id, ck);
+    const f = run.portions / (r.servings || 1);
+    for (const ing of r.ingredients) {
+      if (keep && !keep(ing, run.cookDay)) continue;
+      const k = itemKey(ing.item);
+      const g = items.get(k) || { key: k, name: ing.item, category: ing.category || "Other", amounts: {}, metric: {}, used: new Set(), untracked: false, have: have.has(k) };
+      g.used.add(r.name);
+      if (ing.qty == null || isNaN(ing.qty)) g.untracked = true;
+      else {
+        const u = unitInfo(ing.unit);
+        g.amounts[u.family] = (g.amounts[u.family] || 0) + ing.qty * u.factor * f;
+        if (u.metric != null) g.metric[u.family] = (g.metric[u.family] ?? true) && u.metric;
+      }
+      items.set(k, g);
+    }
+  }
   return { items: [...items.values()], cook: [...cook.values()] };
 }
 /* ---------- shopping trips ---------- */
@@ -1647,6 +1671,13 @@ function slotIds(d, s) {
   const [d0, s0] = run ? run.slots[0] : [d, s];
   return d0 !== d || s0 !== s ? eligibleIds(s0, state.plan.days[d0].cuisine) : slotChoices(d, s);
 }
+// "Cook N servings" on a cooking slot's dish: what the grocery and prep lists buy and cook for, separate from the
+// portion eaten. Auto until changed; steps by half a serving.
+function makeCtl(d, s, dish, name) {
+  if (state.readOnly || !isCookSlot(d, s)) return "";
+  const auto = autoMake(d, s, dish.id), v = dish.make > 0 ? dish.make : auto, id = esc(dish.id), nm = esc(name);
+  return `<div class="make" role="group" aria-label="Servings of ${nm} to cook"><span>Cook</span><button class="lock step" data-action="make" data-d="${d}" data-s="${s}" data-id="${id}" data-dx="-0.5" aria-label="Cook fewer servings of ${nm}" ${v <= 0.5 ? "disabled" : ""}>−</button><b class="num">${+v.toFixed(2)} serving${v === 1 ? "" : "s"}</b><button class="lock step" data-action="make" data-d="${d}" data-s="${s}" data-id="${id}" data-dx="0.5" aria-label="Cook more servings of ${nm}">+</button>${dish.make > 0 ? `<button class="lock" data-action="make-auto" data-d="${d}" data-s="${s}" data-id="${id}" title="Go back to ${+auto.toFixed(2)}: your portions × household">Auto</button>` : `<span class="muted">auto</span>`}</div>`;
+}
 function slotCell(d, s) {
   const day = state.plan.days[d], c = day.slots[s], r = c && state.recipes[c.id];
   const label = SLOTS.find(x => x[0] === s)[1];
@@ -1682,8 +1713,8 @@ function slotCell(d, s) {
   let extrasHtml = extras.map(e => {
     const er = state.recipes[e.id], ex = e.x || 1, ei = esc(e.id);
     return `<div class="extra"><div class="extra-top"><span class="en">+ ${esc(er.name)}</span>
-      <span class="slot-actions"><button class="lock" data-action="view" data-id="${ei}" data-x="${ex}" title="Ingredients and instructions">Recipe</button>${ro ? "" : `<button class="lock" data-action="extra-rm" data-d="${d}" data-s="${s}" data-id="${ei}" aria-label="Remove ${esc(er.name)}">Remove</button>`}</span></div>
-      <div class="extra-meta"><span class="num">×${ex} · ${macroLine(er, ex)}</span>${ro ? "" : `<button class="lock step" data-action="extra-x" data-d="${d}" data-s="${s}" data-id="${ei}" data-dx="-0.25" aria-label="Smaller portion of ${esc(er.name)}" ${ex <= 0.25 ? "disabled" : ""}>−</button><button class="lock step" data-action="extra-x" data-d="${d}" data-s="${s}" data-id="${ei}" data-dx="0.25" aria-label="Larger portion of ${esc(er.name)}" ${ex >= 4 ? "disabled" : ""}>+</button>`}</div></div>`;
+      <span class="slot-actions"><button class="lock" data-action="view" data-id="${ei}" data-x="${ex}"${isCookSlot(d, s) && e.make > 0 ? ` data-make="${e.make}"` : ""} title="Ingredients and instructions">Recipe</button>${ro ? "" : `<button class="lock" data-action="extra-rm" data-d="${d}" data-s="${s}" data-id="${ei}" aria-label="Remove ${esc(er.name)}">Remove</button>`}</span></div>
+      ${makeCtl(d, s, e, er.name)}<div class="extra-meta"><span class="num">×${ex} · ${macroLine(er, ex)}</span>${ro ? "" : `<button class="lock step" data-action="extra-x" data-d="${d}" data-s="${s}" data-id="${ei}" data-dx="-0.25" aria-label="Smaller portion of ${esc(er.name)}" ${ex <= 0.25 ? "disabled" : ""}>−</button><button class="lock step" data-action="extra-x" data-d="${d}" data-s="${s}" data-id="${ei}" data-dx="0.25" aria-label="Larger portion of ${esc(er.name)}" ${ex >= 4 ? "disabled" : ""}>+</button>`}</div></div>`;
   }).join("");
   if (extras.length) {
     const tot = { cal: r.cal * x, p: r.p * x, c: r.c * x, f: r.f * x };
@@ -1696,12 +1727,12 @@ function slotCell(d, s) {
   const cooked = r && isCookSlot(d, s) ? `<div class="cooked"><label><input type="checkbox" data-cooked="${key}" ${ck ? "checked" : ""}> Cooked</label>${ck ? `<select data-rating="${key}" aria-label="Rate this meal"><option value="">Rate</option>${[5,4,3,2,1].map(n => `<option value="${n}" ${ck.rating === n ? "selected" : ""}>${"★".repeat(n)}</option>`).join("")}</select>` : ""}</div>` : "";
   return `<div class="slot ${c && c.locked ? "locked" : ""}">
     <div class="slot-top"><span class="label">${label}${r && on ? ` <span class="ctag">· ${esc(r.cuisine)}</span>` : ""}</span>
-      <span class="slot-actions">${state.readOnly ? "" : `<button class="lock" data-action="pick" data-d="${d}" data-s="${s}" title="Search for a meal" aria-label="Search for a meal for ${DAYS[d]} ${label}">Search</button>`}${r ? `<button class="lock" data-action="view" data-id="${esc(r.id)}" data-x="${x}" title="Ingredients and instructions">Recipe</button>${manual ? "" : `<button class="lock" data-action="lock" data-d="${d}" data-s="${s}" aria-pressed="${!!c.locked}" title="${c.locked ? "Pinned: the planner won't change this" : "Pin this meal"}">${c.locked ? "Pinned" : "Pin"}</button>`}` : ""}</span>
+      <span class="slot-actions">${state.readOnly ? "" : `<button class="lock" data-action="pick" data-d="${d}" data-s="${s}" title="Search for a meal" aria-label="Search for a meal for ${DAYS[d]} ${label}">Search</button>`}${r ? `<button class="lock" data-action="view" data-id="${esc(r.id)}" data-x="${x}"${isCookSlot(d, s) && c.make > 0 ? ` data-make="${c.make}"` : ""} title="Ingredients and instructions">Recipe</button>${manual ? "" : `<button class="lock" data-action="lock" data-d="${d}" data-s="${s}" aria-pressed="${!!c.locked}" title="${c.locked ? "Pinned: the planner won't change this" : "Pin this meal"}">${c.locked ? "Pinned" : "Pin"}</button>`}` : ""}</span>
     </div>
     <select id="sl-${d}-${s}" data-d="${d}" data-s="${s}" aria-label="${DAYS[d]} ${label}">
       <option value="">— Empty —</option>${opts}
     </select>
-    <div class="slot-meta">${meta}</div>${extrasHtml}${manual && r && !state.readOnly ? `<div class="portion" role="group" aria-label="${DAYS[d]} ${label} portion"><span>Portion</span><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="-0.25" aria-label="Smaller portion" ${x <= 0.25 ? "disabled" : ""}>−</button><b class="num">×${x}</b><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="0.25" aria-label="Larger portion" ${x >= 4 ? "disabled" : ""}>+</button></div>` : ""}${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${batchSel}${cooked}
+    <div class="slot-meta">${meta}</div>${r ? makeCtl(d, s, c, r.name) : ""}${extrasHtml}${manual && r && !state.readOnly ? `<div class="portion" role="group" aria-label="${DAYS[d]} ${label} portion"><span>Portion</span><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="-0.25" aria-label="Smaller portion" ${x <= 0.25 ? "disabled" : ""}>−</button><b class="num">×${x}</b><button class="lock" data-action="portion" data-d="${d}" data-s="${s}" data-dx="0.25" aria-label="Larger portion" ${x >= 4 ? "disabled" : ""}>+</button></div>` : ""}${link ? `<div class="slot-link">${esc(link)}</div>` : ""}${batchSel}${cooked}
   </div>`;
 }
 
@@ -1751,7 +1782,7 @@ function viewGroceries() {
     </section>
     <aside class="panel prep">
       <h2>Prep list</h2>
-      <p class="hint">What to cook this week. Servings beyond one meal become leftovers for a later meal; amounts on the list already include them.</p>
+      <p class="hint">What to cook this week. Each dish cooks its "Cook" amount from the week plan: by default your portions for every meal it covers, times your household. Servings beyond one meal become leftovers; the list already includes them.</p>
       <ul>${prep}</ul>
     </aside>
   </div>`;
@@ -1953,10 +1984,10 @@ async function runImport() {
 
 // Recipe detail sheet. With a portion (opened from the plan) amounts are scaled to that portion.
 let viewing = null, lastFocus = null;
-function openRecipe(id, x, from) {
+function openRecipe(id, x, from, make) {
   if (!state.recipes[id]) return;
   lastFocus = from || document.activeElement;
-  viewing = { id, x: x ? +x : null };
+  viewing = { id, x: x ? +x : null, make: make > 0 ? +make : null };
   renderSheet();
   document.getElementById("sheet-close")?.focus();
 }
@@ -2045,15 +2076,16 @@ document.addEventListener("change", async e => {
 function renderSheetIngredients() {
   const r = viewing && state.recipes[viewing.id], ul = document.getElementById("sheet-ings");
   if (!r || !ul) return;
-  const n = viewing.people ?? household(), x = viewing.x, mult = (x || 1) * n / (r.servings || 1);
+  const n = viewing.people ?? household(), x = viewing.x, useMake = viewing.make > 0 && viewing.people == null;
+  const mult = useMake ? viewing.make / (r.servings || 1) : (x || 1) * n / (r.servings || 1);
   ul.innerHTML = r.ingredients.map(i => {
     const { q, name } = easyAmount(i, mult);
     // The source amount stays in small print when the easy amount converted it (grams, ml).
     const src = ingAmount(i, mult), showSrc = q && src && /\b(g|kg|ml|l)$/.test(src);
     return `<li><span class="q">${esc(q)}</span><span class="${q ? "" : "neg"}">${esc(name || i.item)}${i.prep ? `<span class="muted">, ${esc(i.prep)}</span>` : ""}${showSrc ? `<span class="src">${esc(src)}</span>` : ""}</span></li>`;
   }).join("");
-  document.getElementById("sheet-people").textContent = `${n} ${n === 1 ? "person" : "people"}`;
-  document.getElementById("sheet-portion").textContent = `${x && x !== 1 ? `×${x} servings each · ` : ""}recipe makes ${r.servings}`;
+  document.getElementById("sheet-people").textContent = useMake ? "Plan amount" : `${n} ${n === 1 ? "person" : "people"}`;
+  document.getElementById("sheet-portion").textContent = useMake ? `cooking ${viewing.make} servings, as set in your plan · recipe makes ${r.servings}` : `${x && x !== 1 ? `×${x} servings each · ` : ""}recipe makes ${r.servings}`;
   document.querySelector('[data-action="sheet-people"][data-d="-1"]').disabled = n <= 1;
   document.querySelector('[data-action="sheet-people"][data-d="1"]').disabled = n >= 20;
 }
@@ -2340,7 +2372,15 @@ document.addEventListener("click", async e => {
   const a = b.dataset.action, d = +b.dataset.d, S = state.settings;
   if (a === "close-sheet") { if (e.target === b || b.id === "sheet-close") closeRecipe(); return; }
   if (a === "cancel-del") { if (e.target === b || b.tagName === "BUTTON") closeDialog(); return; }
-  if (a === "view") return openRecipe(b.dataset.id, b.dataset.x, b);
+  if (a === "view") return openRecipe(b.dataset.id, b.dataset.x, b, b.dataset.make);
+  if (a === "make" || a === "make-auto") {
+    const d = +b.dataset.d, s = b.dataset.s, c = state.plan.days[d].slots[s]; if (!c) return;
+    const dish = c.id === b.dataset.id ? c : slotExtras(c).find(e => e.id === b.dataset.id); if (!dish) return;
+    if (a === "make-auto") delete dish.make;
+    else dish.make = Math.max(0.5, Math.round(((dish.make > 0 ? dish.make : autoMake(d, s, dish.id)) + +b.dataset.dx) * 2) / 2);
+    savePlan(); render();
+    document.querySelector(`[data-action="${a === "make-auto" ? "make" : a}"][data-d="${d}"][data-s="${s}"][data-id="${b.dataset.id}"]${a === "make" ? `[data-dx="${b.dataset.dx}"]` : ""}`)?.focus(); return;
+  }
   if (a === "pick") return openPicker(+b.dataset.d, b.dataset.s, b);
   // Manual mode: portions step by a quarter serving, from ¼ to 4.
   if (a === "portion") {
