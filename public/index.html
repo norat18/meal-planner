@@ -767,6 +767,10 @@ function mealRuns(batch) {
   const B = lo ? (batch || state.plan.batch || {}) : {};
   const cover = Array(14).fill(-1), runs = [];
   const add = (slots, k) => { slots.forEach(i => { cover[i] = runs.length; }); runs.push({ slots, k }); };
+  // A pinned meal only eats the leftovers of the meal that starts its run when it's pinned to that same recipe;
+  // otherwise it's cooked on its own, so a batch or leftover link never overrides (or leaves empty) a pin.
+  const cell = i => state.plan.days[Math.floor(i / 2)].slots[i % 2 ? "dinner" : "lunch"];
+  const joins = (first, i) => { const c = cell(i), f = cell(first); return !(c && c.locked && state.recipes[c.id] && (!f || f.id !== c.id)); };
   // Batches picked by hand claim their meals first, then the planner's, each in day order.
   const order = Object.keys(B).map(Number).sort((a, b) => (!!B[a].auto - !!B[b].auto) || a - b);
   for (const d of order) {
@@ -775,14 +779,14 @@ function mealRuns(batch) {
     for (let j = 0; j < 14 && sl.length < B[d].k; j++) {
       const i = (start + j) % 14;
       if (cover[i] !== -1) break;
-      if (on(i)) sl.push(i);
+      if (on(i)) { if (sl.length && !joins(start, i)) break; sl.push(i); }
     }
     add(sl, B[d].k);
   }
   for (let d = 0; d < 7; d++) {
     const i = 2 * d + 1, n = (i + 1) % 14;
     if (!on(i) || cover[i] !== -1) continue;
-    add(lo && on(n) && cover[n] === -1 ? [i, n] : [i], 0);
+    add(lo && on(n) && cover[n] === -1 && joins(i, n) ? [i, n] : [i], 0);
   }
   for (let d = 0; d < 7; d++) { const i = 2 * d; if (on(i) && cover[i] === -1) add([i], 0); }
   return runs.map(r => ({ k: r.k, slots: r.slots.map(i => [Math.floor(i / 2), i % 2 ? "dinner" : "lunch"]) }));
@@ -961,7 +965,14 @@ function fillWeek(mode, days, opts = {}) {
   const touched = new Set(days);
   free.forEach(v => v.slots.forEach(([d]) => touched.add(d)));
   vars.forEach((v, i) => {
-    if (!v.free) return;
+    // A pinned meal's leftovers and repeats follow it into any of its slots that are still empty.
+    if (!v.free) {
+      if (v.val && state.recipes[v.val]) v.slots.forEach(([d, s]) => {
+        const p = state.plan.days[d].slots[s];
+        if (!(p && state.recipes[p.id])) { state.plan.days[d].slots[s] = { id: v.val, x: 1, locked: !!v.locked }; touched.add(d); }
+      });
+      return;
+    }
     v.slots.forEach(([d, s]) => {
       const p = state.plan.days[d].slots[s];
       state.plan.days[d].slots[s] = { id: best[i], x: 1, locked: !!(p && p.locked && p.id === best[i]), ...(slotExtras(p).length ? { extras: slotExtras(p) } : {}) };
