@@ -120,6 +120,8 @@ nav.tabs .count { font-family: var(--font-data); font-size: 12px; color: var(--m
 .day { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 12px; }
 .day-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
 .day-head h3 { font-size: 19px; font-weight: 700; min-width: 108px; }
+.day.away { background: transparent; border-style: dashed; }
+.day.away .hint { margin: 0; }
 .day-head select { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 3px 6px; font-size: 13px; }
 .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
 .slot { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; min-width: 0; background: var(--bg); }
@@ -429,9 +431,10 @@ const DEFAULT_SETTINGS = {
   manual: false      // Manual mode: every slot is chosen and portioned by hand; no linking, filtering or planner
 };
 const BF_PATTERNS = { three: [[0, 1], [2, 3], [4, 5, 6]], two: [[0, 1, 2, 3], [4, 5, 6]] };
-function bfGroups() { return BF_PATTERNS[state.settings.bfMode] || BF_PATTERNS.three; }
-// The last block (Fri–Sun) is eaten in the car.
-function isCarGroup(g) { return g === bfGroups().length - 1; }
+// Breakfast blocks, leaving out travel days (a block that's all travel drops out).
+function bfGroups() { return (BF_PATTERNS[state.settings.bfMode] || BF_PATTERNS.three).map(g => g.filter(d => !isAway(d))).filter(g => g.length); }
+// The Fri–Sun block is eaten in the car.
+function isCarGroup(g) { const grp = bfGroups()[g]; return !!grp && grp.some(d => d >= 4); }
 function bfLabel(g) { return `${DAYS[g[0]].slice(0, 3)}–${DAYS[g[g.length - 1]].slice(0, 3)}`; }
 
 /* Example recipes. Macros are per serving; ingredient amounts are for the whole recipe. */
@@ -668,6 +671,9 @@ function exampleRecipes() {
 
 /* ---------- derived data ---------- */
 function activeSlots() { return SLOTS.map(s => s[0]).filter(s => state.settings.slots[s]); }
+// Travel days (plan.days[d].away): no meals are planned, cooked, bought or counted that day.
+function isAway(d) { const day = state.plan && state.plan.days[d]; return !!(day && day.away); }
+function daySlots(d) { return isAway(d) ? [] : activeSlots(); }
 function cuisines() { return [...new Set(Object.values(state.recipes).map(r => r.cuisine))].sort(); }
 function itemKey(name) { return name.toLowerCase().replace(/\s+/g, " ").trim(); }
 // Distinct ingredient keys a recipe needs. Items marked "I already have this" don't count toward the unique total.
@@ -763,7 +769,7 @@ function bfGroup(d) { return bfGroups().findIndex(g => g.includes(d)); }
 // meals in a row: k = 4 is Mon dinner, Tue lunch, Tue dinner, Wed lunch. A lunch left over after an odd-sized
 // batch is cooked fresh on its own.
 function mealRuns(batch) {
-  const act = activeSlots(), on = i => act.includes(i % 2 ? "dinner" : "lunch"), lo = linkMode().lo;
+  const act = activeSlots(), away = i => isAway(Math.floor(i / 2)), on = i => !away(i) && act.includes(i % 2 ? "dinner" : "lunch"), lo = linkMode().lo;
   const B = lo ? (batch || state.plan.batch || {}) : {};
   const cover = Array(14).fill(-1), runs = [];
   const add = (slots, k) => { slots.forEach(i => { cover[i] = runs.length; }); runs.push({ slots, k }); };
@@ -778,7 +784,7 @@ function mealRuns(batch) {
     if (!on(start) || cover[start] !== -1) continue;
     for (let j = 0; j < 14 && sl.length < B[d].k; j++) {
       const i = (start + j) % 14;
-      if (cover[i] !== -1) break;
+      if (cover[i] !== -1 || away(i)) break;
       if (on(i)) { if (sl.length && !joins(start, i)) break; sl.push(i); }
     }
     add(sl, B[d].k);
@@ -795,6 +801,7 @@ function runOf(d, s, runs) { return (runs || mealRuns()).find(r => r.slots.some(
 // Every slot that must hold the same recipe as [d, s], including itself.
 function linkedSlots(d, s) {
   const L = linkMode();
+  if (isAway(d)) return [[d, s]];
   if (s === "breakfast" && L.bf) return bfGroups()[bfGroup(d)].map(x => [x, "breakfast"]);
   if (s === "lunch" || s === "dinner") { const r = runOf(d, s); if (r) return r.slots; }
   return [[d, s]];
@@ -828,10 +835,10 @@ function weekVars() {
   const act = activeSlots(), L = linkMode(), vars = [];
   if (act.includes("breakfast")) {
     if (L.bf) bfGroups().forEach(g => vars.push({ kind: "bf", cook: g[0], slots: g.map(x => [x, "breakfast"]) }));
-    else DAYS.forEach((_, d) => vars.push({ kind: "one", cook: d, slots: [[d, "breakfast"]] }));
+    else DAYS.forEach((_, d) => { if (!isAway(d)) vars.push({ kind: "one", cook: d, slots: [[d, "breakfast"]] }); });
   }
   if (act.includes("lunch") || act.includes("dinner")) mealRuns().forEach(r => vars.push({ kind: r.slots.length > 1 ? "din" : "one", cook: r.slots[0][0], slots: r.slots, k: r.k }));
-  for (const s of act.filter(s => !["breakfast", "lunch", "dinner"].includes(s))) DAYS.forEach((_, d) => vars.push({ kind: "snack", cook: d, slots: [[d, s]] }));
+  for (const s of act.filter(s => !["breakfast", "lunch", "dinner"].includes(s))) DAYS.forEach((_, d) => { if (!isAway(d)) vars.push({ kind: "snack", cook: d, slots: [[d, s]] }); });
   vars.forEach(v => {
     const [d0, s0] = v.slots[0];
     let c = slotChoices(d0, s0);
@@ -851,14 +858,16 @@ function weekVars() {
 const TIER = { missing: 2e7, macroDay: 1e6, macroSize: 1e5, repeat: 1e4, cuisine: 1e4, same: 5e3 };
 // Places the week's big batches (keeping ones picked by hand), then fills the plan.
 function generate(mode, days) {
-  const S = state.settings, plan = state.plan;
+  const S = state.settings, plan = state.plan, full = days.length === 7;
+  days = days.filter(d => !isAway(d)); // nothing is planned on travel days
   plan.batch = plan.batch || {};
-  if (days.length === 7 && linkMode().lo) {
+  for (const d in plan.batch) if (isAway(+d)) delete plan.batch[d];
+  if (full && linkMode().lo) {
     for (const d in plan.batch) if (plan.batch[d].auto) delete plan.batch[d];
     const n = Math.max(0, Math.min(3, Math.round(+S.bigBatches || 0))), k = +S.batchSize || 4;
     if (n) {
       const manual = { ...plan.batch };
-      const usable = DAYS.map((_, d) => d).filter(d => !manual[d] && !(plan.days[d].slots.dinner && plan.days[d].slots.dinner.locked));
+      const usable = DAYS.map((_, d) => d).filter(d => !manual[d] && !isAway(d) && !(plan.days[d].slots.dinner && plan.days[d].slots.dinner.locked));
       let bestC = [], bestS = Infinity;
       for (const c of batchCombos(usable, n, 12)) {
         plan.batch = { ...manual }; c.forEach(d => { plan.batch[d] = { k, auto: true }; });
@@ -871,7 +880,7 @@ function generate(mode, days) {
       plan.batch = { ...manual }; bestC.forEach(d => { plan.batch[d] = { k, auto: true }; });
     }
   }
-  return fillWeek(mode, days);
+  return fillWeek(mode, days, { full });
 }
 // Up to max random sets of n days, at least 2 days apart (a 3- or 4-meal batch spans into the next day).
 function batchCombos(days, n, max) {
@@ -900,7 +909,7 @@ function fillWeek(mode, days, opts = {}) {
   vars.forEach((v, i) => v.slots.forEach(([d, s]) => { slotVar[d][s] = i; }));
   const memo = new Map(), fixedOf = DAYS.map((_, d) => dayFixed(d));
   const daySolve = (vals, d) => {
-    const ids = act.map(s => vals[slotVar[d][s]]);
+    const ids = daySlots(d).map(s => vals[slotVar[d][s]]);
     if (ids.some(id => !id)) return null;
     const k = fixedOf[d].join(",") + "|" + ids.join("|");
     if (!memo.has(k)) memo.set(k, solve(ids.map(id => state.recipes[id]), fixedOf[d]));
@@ -911,6 +920,7 @@ function fillWeek(mode, days, opts = {}) {
   const score = vals => {
     let sc = 0;
     for (let d = 0; d < 7; d++) {
+      if (isAway(d)) continue;
       const s = daySolve(vals, d);
       if (!s) { sc += TIER.missing; continue; }
       if (withTargets) {
@@ -979,8 +989,8 @@ function fillWeek(mode, days, opts = {}) {
     });
   });
   touched.forEach(d => rebalance(d));
-  if (days.length === 7) { S.planLog = [...(S.planLog || []), new Date().toISOString()].slice(-60); saveSettings(); }
-  const skipped = days.filter(d => act.some(s => !best[slotVar[d][s]]));
+  if (opts.full) { S.planLog = [...(S.planLog || []), new Date().toISOString()].slice(-60); saveSettings(); }
+  const skipped = days.filter(d => daySlots(d).some(s => !best[slotVar[d][s]]));
   const offTarget = days.filter(d => !skipped.includes(d) && !dayStatus(d).feasible);
   const shortBy = needMore(vars, best);
   return { skipped, offTarget, shortBy, repeats: cookedRepeats(vars, best), cuisineMiss: cuisineRule && new Set(best.filter((id, i) => id && vars[i].kind !== "snack").map(id => state.recipes[id].cuisine)).size < 2 };
@@ -1021,7 +1031,7 @@ function slotExtras(c) { return c && Array.isArray(c.extras) ? c.extras.filter(e
 // [cal, p, c, f, fib] of a day's extra dishes.
 function dayFixed(d) {
   const t = [0, 0, 0, 0, 0], day = state.plan.days[d];
-  for (const s of activeSlots()) for (const e of slotExtras(day.slots[s])) {
+  for (const s of daySlots(d)) for (const e of slotExtras(day.slots[s])) {
     const r = state.recipes[e.id], x = e.x || 1;
     t[0] += r.cal * x; t[1] += r.p * x; t[2] += r.c * x; t[3] += r.f * x; t[4] += fib(r) * x;
   }
@@ -1029,14 +1039,14 @@ function dayFixed(d) {
 }
 function rebalance(d) {
   if (state.settings.manual) return; // Manual mode keeps the portions you set
-  const day = state.plan.days[d], act = activeSlots();
+  const day = state.plan.days[d], act = daySlots(d);
   const filled = act.filter(s => day.slots[s] && state.recipes[day.slots[s].id]);
-  if (filled.length < act.length) return;
+  if (!act.length || filled.length < act.length) return;
   const s = solve(filled.map(sl => state.recipes[day.slots[sl].id]), dayFixed(d));
   filled.forEach((sl, i) => { day.slots[sl].x = s.x[i]; });
 }
 function dayStatus(d) {
-  const day = state.plan.days[d], act = activeSlots(), S = state.settings;
+  const day = state.plan.days[d], act = daySlots(d), S = state.settings;
   const tot = { cal: 0, p: 0, c: 0, f: 0, fib: 0 }; let filled = 0;
   for (const s of act) {
     const c = day.slots[s], r = c && state.recipes[c.id];
@@ -1072,7 +1082,7 @@ function household() { return Math.max(1, Math.round(+state.settings.household |
 function cookRuns() {
   const runs = new Map(), H = household();
   state.plan.days.forEach((day, d) => {
-    for (const s of activeSlots()) {
+    for (const s of daySlots(d)) {
       const c = day.slots[s];
       if (!c || !state.recipes[c.id]) continue;
       const at = linkedSlots(d, s)[0], isCook = at[0] === d && at[1] === s;
@@ -1435,7 +1445,7 @@ function mergeSettings(s) {
 function mergePlan(p) {
   const e = emptyPlan();
   if (!p || !Array.isArray(p.days)) return e;
-  return { days: e.days.map((d, i) => ({ cuisine: (p.days[i] && p.days[i].cuisine) || "", slots: (p.days[i] && p.days[i].slots) || {} })), checked: p.checked || {}, cooked: p.cooked || {}, batch: p.batch || {} };
+  return { days: e.days.map((d, i) => ({ cuisine: (p.days[i] && p.days[i].cuisine) || "", slots: (p.days[i] && p.days[i].slots) || {}, ...(p.days[i] && p.days[i].away ? { away: true } : {}) })), checked: p.checked || {}, cooked: p.cooked || {}, batch: p.batch || {} };
 }
 
 /* ---------- accounts and storage ---------- */
@@ -1581,10 +1591,10 @@ function viewOnboarding() {
 }
 
 function weekSummary() {
-  let on = 0, complete = 0;
-  state.plan.days.forEach((_, d) => { const s = dayStatus(d); if (s.complete) { complete++; if (s.feasible) on++; } });
+  let on = 0, complete = 0, home = 0;
+  state.plan.days.forEach((_, d) => { if (isAway(d)) return; home++; const s = dayStatus(d); if (s.complete) { complete++; if (s.feasible) on++; } });
   const g = groceries().items;
-  return { on, complete, unique: g.filter(i => !i.have).length, have: g.filter(i => i.have).length };
+  return { on, complete, home, unique: g.filter(i => !i.have).length, have: g.filter(i => i.have).length };
 }
 
 function viewPlan() {
@@ -1604,7 +1614,7 @@ function viewPlan() {
   return `
   <section class="toolbar">
     <div class="statusline">
-      ${on ? `<span class="pill ${ws.on === 7 ? "ok" : ws.complete ? "warn" : ""}">${ws.on} of 7 days on target</span>` : ""}
+      ${on ? `<span class="pill ${ws.home && ws.on === ws.home ? "ok" : ws.complete ? "warn" : ""}">${ws.on} of ${ws.home} days on target</span>${ws.home < 7 ? ` <span class="muted">${7 - ws.home} traveling</span>` : ""}` : ""}
       <span><b class="num">${ws.unique}</b> <span class="muted">unique ingredients${ws.have ? `, not counting ${ws.have} you already have` : ""}</span></span>
     </div>
     <label class="toggle manual-toggle"><input type="checkbox" data-flag="manual" ${S.manual ? "checked" : ""}> Manual mode: I choose every meal and portion</label>
@@ -1629,7 +1639,13 @@ function viewPlan() {
 }
 
 function dayCard(d) {
-  const day = state.plan.days[d], st = dayStatus(d), S = state.settings, act = activeSlots(), on = goalsOn();
+  const day = state.plan.days[d], ro = state.readOnly;
+  const awayBtn = ro ? "" : `<button class="btn ghost small" data-action="away" data-d="${d}" aria-pressed="${!!day.away}" title="${day.away ? "Plan meals for this day again" : "No meals this day: the planner skips it and nothing goes on the grocery list"}">${day.away ? "I'm home" : "Traveling"}</button>`;
+  if (day.away) return `<article class="day away">
+    <div class="day-head"><h3>${DAYS[d]}</h3><span class="pill">Traveling</span><span class="spacer"></span>${awayBtn}</div>
+    <p class="hint">No meals planned. Nothing is cooked or bought for this day, and leftovers and big batches stop before it.</p>
+  </article>`;
+  const st = dayStatus(d), S = state.settings, act = activeSlots(), on = goalsOn();
   const cs = cuisines();
   let pill;
   if (st.complete && !on) pill = `<span class="pill ok">Planned</span>`;
@@ -1668,7 +1684,7 @@ function dayCard(d) {
         <option value="">Any cuisine</option>
         ${cs.map(c => `<option value="${esc(c)}" ${day.cuisine === c ? "selected" : ""}>${esc(c)} day</option>`).join("")}
       </select>`}
-      ${pill}<span class="spacer"></span>${st.filled ? `<button class="btn ghost small" data-action="copy-mfp-day" data-d="${d}" title="Copy each meal's calories and macros for MyFitnessPal Quick Add">Copy for MFP</button>` : ""}${action}
+      ${pill}<span class="spacer"></span>${awayBtn}${st.filled ? `<button class="btn ghost small" data-action="copy-mfp-day" data-d="${d}" title="Copy each meal's calories and macros for MyFitnessPal Quick Add">Copy for MFP</button>` : ""}${action}
     </div>
     <div class="slots">${slots}</div>
     ${meters ? `<div class="meters">${meters}</div>` : ""}
@@ -1704,7 +1720,7 @@ function slotCell(d, s) {
     ? `Makes ${DAYS[(d + 1) % 7]}'s lunch too` : `Big batch: also ${run.slots.slice(1).map(mealName).join(", ")}`;
   else if (run && s === "lunch" && L.lo) link = "Cooked fresh";
   // How many meals this dinner makes: 2 (dinner + next lunch) by default, or a big batch of 3 or 4.
-  if (run && s === "dinner" && d0 === d && s0 === s && L.lo) {
+  if (run && s === "dinner" && d0 === d && s0 === s && L.lo && !isAway((d + 1) % 7)) {
     const b = (state.plan.batch || {})[d], k = b ? b.k : 2;
     batchSel = `<label class="cooked">Makes <select data-batch="${d}" aria-label="${DAYS[d]} dinner makes">${[2, 3, 4].map(n => `<option value="${n}" ${k === n ? "selected" : ""}>${n} meals</option>`).join("")}</select>${b && b.auto ? ` <span class="ctag">planner's pick</span>` : ""}</label>`;
   }
@@ -2160,7 +2176,7 @@ async function copyText(text, okMsg) {
 }
 function mfpDayText(d) {
   const day = state.plan.days[d], lines = [];
-  for (const s of activeSlots()) {
+  for (const s of daySlots(d)) {
     const c = day.slots[s], r = c && state.recipes[c.id];
     if (r) lines.push(mfpLine(r, c.x || 1, SLOTS.find(x => x[0] === s)[1]));
     if (r) for (const e of slotExtras(c)) lines.push(mfpLine(state.recipes[e.id], e.x || 1, SLOTS.find(x => x[0] === s)[1] + " (extra dish)"));
@@ -2472,12 +2488,25 @@ document.addEventListener("click", async e => {
     });
     case "gen-random": return busy(() => afterGenerate(generate("random", allDays()), "Here's a random week that still follows your rules."));
     case "fill-empty": return busy(() => {
-      const days = allDays().filter(i => !dayStatus(i).complete);
+      const days = allDays().filter(i => !isAway(i) && !dayStatus(i).complete);
       if (!days.length) return toast("Every day is already filled.");
       afterGenerate(generate("lean", days), `Filled ${days.length} day${days.length > 1 ? "s" : ""}.`);
     });
     case "fill-day": case "fix-day": return busy(() => afterGenerate(generate("lean", [d]), `${DAYS[d]} is balanced.`));
     case "reroll-day": return busy(() => afterGenerate(generate("random", [d]), `New meals for ${DAYS[d]}.`));
+    case "away": {
+      // Marking a travel day clears its meals; meals that were leftovers of it (or a batch running through it) are freed.
+      const day = state.plan.days[d], oldRuns = mealRuns();
+      day.away = !day.away;
+      if (day.away) { day.slots = {}; day.cuisine = ""; if (state.plan.batch) delete state.plan.batch[d]; }
+      else delete day.away;
+      relink(oldRuns);
+      if (linkMode().bf) bfGroups().forEach(g => { const src = g.map(x => state.plan.days[x].slots.breakfast).find(c => c && state.recipes[c.id]);
+        if (src) g.forEach(x => { if (!state.plan.days[x].slots.breakfast) state.plan.days[x].slots.breakfast = { id: src.id, x: 1, locked: !!src.locked }; }); });
+      DAYS.forEach((_, i) => rebalance(i));
+      savePlan(); render();
+      return toast(day.away ? `${DAYS[d]} is a travel day: no meals planned.` : `${DAYS[d]} is back. Use Fill the rest to plan its meals.`);
+    }
     case "clear-unlocked":
       state.plan.days.forEach(day => { for (const s in day.slots) if (!day.slots[s] || !day.slots[s].locked) delete day.slots[s]; });
       savePlan(); return render();
